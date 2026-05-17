@@ -1,0 +1,43 @@
+{
+  "name": "@neko-os/db",
+  "version": "0.1.0",
+  "license": "MIT",
+  "author": "Christian Storch <ccstorch@gmail.com>",
+  "main": "dist/index.js",
+  "module": "dist/index.js",
+  "react-native": "src/index.js",
+  "files": [
+    "dist",
+    "src"
+  ],
+  "scripts": {
+    "build": "rm -rf dist && babel src --out-dir dist --extensions \".js,.jsx\" --copy-files",
+    "watch": "babel src --out-dir dist --extensions \".js,.jsx\" --copy-files --watch",
+    "dev": "yarn build && yarn watch",
+    "prepublishOnly": "yarn build",
+    "publish": "npm publish --access public"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "peerDependencies": {
+    "expo-sqlite": "*",
+    "react": "*",
+    "@neko-os/ui": "*",
+    "@react-navigation/native": "*"
+  },
+  "peerDependenciesMeta": {
+    "@neko-os/ui": {
+      "optional": true
+    },
+    "@react-navigation/native": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@babel/cli": "^7",
+    "@babel/core": "^7",
+    "babel-plugin-module-resolver": "^5.0.2",
+    "metro-react-native-babel-preset": "^0.77.0"
+  }
+}
