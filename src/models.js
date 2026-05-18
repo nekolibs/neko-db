@@ -16,13 +16,7 @@ export function registerModels(modelList) {
   return models
 }
 
-export function generateId() {
-  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
-    const r = (Math.random() * 16) | 0
-    const v = c === 'x' ? r : (r & 0x3) | 0x8
-    return v.toString(16)
-  })
-}
+import { generateUUIDv7 } from './utils/uuid'
 
 export class GraphQLResolver {
   constructor({ schema, types, resolver }) {
@@ -153,7 +147,7 @@ export class Model {
 
     // Auto-generate UUID id
     if (!data.id) {
-      data = { id: generateId(), ...data }
+      data = { id: generateUUIDv7(), ...data }
     }
 
     // Auto-timestamps
@@ -188,7 +182,7 @@ export class Model {
     const hasTriggers = Object.keys(this.triggers).length > 0
 
     // Auto-generate UUID ids
-    dataArray = dataArray.map((d) => (d.id ? d : { id: generateId(), ...d }))
+    dataArray = dataArray.map((d) => (d.id ? d : { id: generateUUIDv7(), ...d }))
 
     // Auto-timestamps
     dataArray = dataArray.map((d) => this._applyTimestamps(d, true))

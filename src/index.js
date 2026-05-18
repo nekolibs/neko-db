@@ -1,4 +1,5 @@
 export * from './models'
+export * from './utils/uuid'
 export * from './migrator'
 export * from './query'
 export * from './operators'
