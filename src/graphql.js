@@ -1,6 +1,14 @@
 import { getModel } from './models'
 import { Query } from './query'
 
+export class GraphQLResolver {
+  constructor({ schema, types, resolver }) {
+    this.schema = schema
+    this.types = types || null
+    this.resolver = resolver
+  }
+}
+
 /**
  * Build a query from GraphQL resolver info
  * Automatically selects only requested fields and preloads relationships
