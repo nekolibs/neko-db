@@ -40,7 +40,7 @@ npx expo install expo-sqlite
 // App.js
 import { NekoDB } from '@neko-os/db'
 import { models } from './src/data/models'
-import migrations from './src/data/migrations'
+import { migrations } from './src/data/migrations'
 
 export default function App() {
   return (
@@ -378,9 +378,9 @@ Migrations manage your database schema changes.
 
 ```javascript
 // src/data/migrations/001_create_category.js
-export default {
+export const createCategoryMigration = {
   version: 1,
-  name: 'createCategoryTable',
+  name: 'create_category',
 
   async up(db) {
     await db.execAsync(`
@@ -401,9 +401,9 @@ export default {
 
 ```javascript
 // src/data/migrations/002_create_goal.js
-export default {
+export const createGoalMigration = {
   version: 2,
-  name: 'createGoalTable',
+  name: 'create_goal',
 
   async up(db) {
     await db.execAsync(`
@@ -425,15 +425,13 @@ export default {
 
 ```javascript
 // src/data/migrations/index.js
-import createCategoryTable from './001_create_category'
-import createGoalTable from './002_create_goal'
+import { createCategoryMigration } from './001_create_category'
+import { createGoalMigration } from './002_create_goal'
 
-const migrations = [
-  createCategoryTable,
-  createGoalTable,
+export const migrations = [
+  createCategoryMigration,
+  createGoalMigration,
 ]
-
-export default migrations
 ```
 
 ### Migration Features
@@ -1204,7 +1202,7 @@ For development and testing, you can reset the database to a clean state.
 ```javascript
 import { useSQLiteContext } from 'expo-sqlite'
 import { resetDatabase, runMigrations } from '@neko-os/db'
-import migrations from './data/migrations'
+import { migrations } from './data/migrations'
 
 function DevTools() {
   const db = useSQLiteContext()
