@@ -4,8 +4,10 @@ A lightweight ORM and query builder for Expo SQLite, inspired by Ecto.
 
 ## Table of Contents
 
+**ORM & Query Builder**
 - [Setup](#setup)
 - [Models](#models)
+- [Timestamps](#timestamps)
 - [Triggers](#triggers)
 - [Migrations](#migrations)
 - [Query Builder](#query-builder)
@@ -13,9 +15,13 @@ A lightweight ORM and query builder for Expo SQLite, inspired by Ecto.
 - [Operators](#operators)
 - [Relationships](#relationships)
 - [Raw SQL](#raw-sql)
-- [GraphQL Integration](#graphql-integration)
-  - [GraphQLResolver](#modelresolver)
 - [Reset Database](#reset-database)
+- [Database Viewer](#database-viewer)
+
+**GraphQL Integration (optional)**
+- [GraphQL Integration](#graphql-integration)
+  - [GraphQLResolver](#graphqlresolver)
+  - [fromGraphQL](#fromgraphql)
 
 ---
 
@@ -24,6 +30,7 @@ A lightweight ORM and query builder for Expo SQLite, inspired by Ecto.
 ### 1. Install expo-sqlite
 
 ```bash
+yarn install @neko-os/db
 npx expo install expo-sqlite
 ```
 
@@ -31,7 +38,7 @@ npx expo install expo-sqlite
 
 ```javascript
 // App.js
-import { NekoDB } from './src/data/lib/NekoDB'
+import { NekoDB } from '@neko-os/db'
 import { models } from './src/data/models'
 import migrations from './src/data/migrations'
 
@@ -60,42 +67,12 @@ function MyComponent() {
 
 ## Models
 
-Models define your data structure and relationships.
+Models define your data structure and relationships. GraphQL integration is optional — see [GraphQL Integration](#graphql-integration) if you need it.
 
 ### Defining a Model
 
-Models can include fields, GraphQL typeDefs, and resolvers in a single definition:
-
 ```javascript
-// src/data/models/goal.js
-import { gql } from '@apollo/client'
-import { Model, fields, fromGraphQL } from '../lib'
-
-const typeDefs = gql`
-  extend type Query {
-    goals: [Goal!]!
-    goal(id: String!): Goal
-  }
-
-  extend type Mutation {
-    upsertGoal(input: GoalInput!): Goal!
-    deleteGoal(id: String!): Boolean!
-  }
-
-  type Goal {
-    id: String!
-    name: String!
-    color: String
-    type: String
-  }
-
-  input GoalInput {
-    id: String
-    name: String!
-    color: String
-    type: String
-  }
-`
+import { Model, fields } from '@neko-os/db'
 
 export const GoalModel = new Model('goal', {
   fields: {
@@ -108,30 +85,6 @@ export const GoalModel = new Model('goal', {
     // Relationships
     category: fields.belongsTo('category'),
     updates: fields.hasMany('goalUpdate'),
-  },
-
-  typeDefs,
-
-  resolvers: {
-    Query: {
-      goals: (_, args, { db }, info) => {
-        return fromGraphQL(GoalModel, info).all(db)
-      },
-      goal: (_, { id }, { db }, info) => {
-        return fromGraphQL(GoalModel, info, { where: { id } }).first(db)
-      },
-    },
-    Mutation: {
-      upsertGoal: async (_, { input }, { db }) => {
-        return GoalModel.insert(db, input, {
-          onConflict: { target: 'id', update: 'all' },
-        })
-      },
-      deleteGoal: async (_, { id }, { db }) => {
-        const result = await GoalModel.delete(db, id)
-        return result.changes > 0
-      },
-    },
   },
 })
 ```
@@ -205,7 +158,7 @@ export const EventModel = new Model('event', {
 // src/data/models/index.js
 import { GoalModel } from './goal'
 import { CategoryModel } from './category'
-import { registerModels } from '../lib/models'
+import { registerModels } from '@neko-os/db'
 
 export const models = registerModels([
   GoalModel,
@@ -500,7 +453,7 @@ The query builder provides a chainable, immutable API for building SQL queries.
 ### Starting a Query
 
 ```javascript
-import { from, table, raw } from './data/lib'
+import { from, table, raw } from '@neko-os/db'
 
 // From a model (enables relationships)
 from(GoalModel).all(db)
@@ -652,7 +605,7 @@ const newGoal = await GoalModel.insert(db, {
 console.log(newGoal.id) // Auto-generated UUID (e.g. 'a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d')
 
 // Via Query
-import { Query } from './data/lib'
+import { Query } from '@neko-os/db'
 const newGoal = await Query.insert(db, GoalModel, { name: 'Test' })
 ```
 
@@ -779,7 +732,7 @@ await from(GoalModel)
 Wrap multiple operations in a transaction so they all succeed or all roll back.
 
 ```javascript
-import { Query } from './data/lib'
+import { Query } from '@neko-os/db'
 
 // If either insert fails, both are rolled back
 await Query.transaction(db, async () => {
@@ -797,7 +750,7 @@ Any queries, inserts, updates, or deletes inside the callback share the same tra
 Operators allow comparison expressions in where clauses.
 
 ```javascript
-import { gt, gte, lt, lte, ne, like, notLike, notIn } from './data/lib'
+import { gt, gte, lt, lte, ne, like, notLike, notIn } from '@neko-os/db'
 ```
 
 | Operator | SQL | Example |
@@ -938,7 +891,7 @@ const goals = await from(GoalModel)
 Use `fragment()` for raw SQL expressions within queries.
 
 ```javascript
-import { fragment, col } from './data/lib'
+import { fragment, col } from '@neko-os/db'
 
 // Raw SQL in where
 from(GoalModel)
@@ -966,7 +919,7 @@ from(GoalModel)
 For complex queries (CTEs, UNIONs, etc.), use `raw()`.
 
 ```javascript
-import { raw } from './data/lib'
+import { raw } from '@neko-os/db'
 
 // Simple raw query
 const goals = await raw(
@@ -993,7 +946,7 @@ const goal = await raw(
 Use `table()` for queries on tables without a model.
 
 ```javascript
-import { table } from './data/lib'
+import { table } from '@neko-os/db'
 
 const logs = await table('audit_log')
   .where({ action: 'create' })
@@ -1006,6 +959,8 @@ const logs = await table('audit_log')
 
 ## GraphQL Integration
 
+> **Optional.** Everything above works without GraphQL or Apollo. This section is only needed if you want to add a GraphQL API on top of your models. Requires `@apollo/client` as a peer dependency.
+
 NekoDB integrates with Apollo GraphQL. Models define their own typeDefs and resolvers, which are auto-collected for Apollo.
 
 ### Setup
@@ -1014,7 +969,7 @@ NekoDB integrates with Apollo GraphQL. Models define their own typeDefs and reso
 // src/utils/apollo/schema.js
 import { gql } from '@apollo/client'
 import { models } from '../../data/models'
-import { collectTypeDefs } from '../../data/lib/graphql'
+import { collectTypeDefs } from '@neko-os/db'
 
 const baseTypeDefs = gql`
   type Query
@@ -1027,7 +982,7 @@ export const typeDefs = [baseTypeDefs, ...collectTypeDefs(models)]
 ```javascript
 // src/utils/apollo/resolvers.js
 import { models } from '../../data/models'
-import { collectResolvers } from '../../data/lib/graphql'
+import { collectResolvers } from '@neko-os/db'
 
 export const resolvers = collectResolvers(models)
 ```
@@ -1039,7 +994,7 @@ With this setup, adding a new model with `typeDefs` and `resolvers` to the model
 Use `GraphQLResolver` to split queries and mutations into individual files. Each resolver defines its schema signature, optional extra types, and the resolver function.
 
 ```javascript
-import { GraphQLResolver, fromGraphQL, getModel, raw } from '../../lib'
+import { GraphQLResolver, fromGraphQL, getModel, raw } from '@neko-os/db'
 
 // Simple query
 export const goalsQuery = new GraphQLResolver({
@@ -1065,7 +1020,7 @@ export const monthlyProgressQuery = new GraphQLResolver({
 Wire them into the model:
 
 ```javascript
-import { Model, fields } from '../../lib'
+import { Model, fields } from '@neko-os/db'
 import { goalsQuery } from './queries/goals'
 import { upsertGoalMutation } from './mutations/upsertGoal'
 
@@ -1102,7 +1057,7 @@ src/data/models/
 Resolver files use `getModel()` to access models, avoiding circular imports:
 
 ```javascript
-import { getModel } from '../../lib'
+import { getModel } from '@neko-os/db'
 
 const GoalModel = getModel('goal')       // resolved at runtime
 const ReminderModel = getModel('reminder')
@@ -1116,7 +1071,7 @@ The `fromGraphQL` function reads the GraphQL query's selection set and:
 - Only fetches requested columns from related tables
 
 ```javascript
-import { fromGraphQL } from './data/lib'
+import { fromGraphQL } from '@neko-os/db'
 
 // In your model's resolvers
 resolvers: {
@@ -1248,7 +1203,7 @@ For development and testing, you can reset the database to a clean state.
 
 ```javascript
 import { useSQLiteContext } from 'expo-sqlite'
-import { resetDatabase, runMigrations } from './data/lib'
+import { resetDatabase, runMigrations } from '@neko-os/db'
 import migrations from './data/migrations'
 
 function DevTools() {
@@ -1280,7 +1235,7 @@ Built-in views for inspecting database content at runtime. Useful for developmen
 Add the two views to your router:
 
 ```javascript
-import { ModelListView, ModelDataView } from './data/lib'
+import { ModelListView, ModelDataView } from '@neko-os/db'
 
 <Stack.Screen name="nekodb/models" component={ModelListView} />
 <Stack.Screen name="nekodb/model" component={ModelDataView} />
@@ -1309,25 +1264,17 @@ Shows all rows in a model's table as formatted JSON. Receives the model name via
 ## File Structure
 
 ```
-src/data/
-├── lib/
-│   ├── index.js        # Exports
-│   ├── models.js       # Model class and fields
-│   ├── query.js        # Query builder
-│   ├── operators.js    # Comparison operators
-│   ├── migrator.js     # Migration runner
-│   ├── graphql.js      # GraphQL integration
-│   ├── NekoDB.js       # React provider
-│   └── views/
-│       ├── ModelListView.js   # Dev: browse models
-│       └── ModelDataView.js   # Dev: inspect table data
-├── models/
-│   ├── index.js        # Model registry
-│   └── goal.js         # Example model
-└── migrations/
-    ├── index.js        # Migration registry
-    ├── 001_create_category.js
-    └── 002_create_goal.js
+@neko-os/db
+├── index.js           # Exports
+├── models.js          # Model class, fields, GraphQLResolver
+├── query.js           # Query builder
+├── operators.js       # Comparison operators (gt, gte, lt, lte, ne, like, notLike, notIn)
+├── migrator.js        # Migration runner
+├── graphql.js         # GraphQL integration (optional)
+├── NekoDB.js          # React provider (SQLiteProvider wrapper)
+└── views/
+    ├── ModelListView.js   # Dev: browse models
+    └── ModelDataView.js   # Dev: inspect table data
 ```
 
 ---
