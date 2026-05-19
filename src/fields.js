@@ -1,6 +1,17 @@
+import dayjs from 'dayjs'
+
 export const fields = {
   string(...props) {
     return { type: 'string', ...props }
+  },
+
+  date(...props) {
+    return {
+      type: 'date',
+      serialize: (v) => (v != null ? dayjs(v).format('YYYY-MM-DD') : null),
+      deserialize: (v) => (v != null ? dayjs(v) : null),
+      ...props,
+    }
   },
 
   int(...props) {

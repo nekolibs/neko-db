@@ -21,6 +21,7 @@
     "access": "public"
   },
   "peerDependencies": {
+    "dayjs": "*",
     "expo-sqlite": "*",
     "react": "*",
     "@neko-os/ui": "*",

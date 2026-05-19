@@ -1,4 +1,4 @@
-import { getModel } from './models'
+import { getModel, getEmitter } from './models'
 
 export class Query {
   constructor(source, state = {}) {
@@ -24,6 +24,7 @@ export class Query {
       offset: state.offset ?? null,
       rawSQL: state.rawSQL ?? null,
       rawParams: state.rawParams ?? [],
+      dependencies: state.dependencies ?? [],
     }
   }
 
@@ -39,6 +40,10 @@ export class Query {
     return this._clone({
       where: [...this._state.where, conditions],
     })
+  }
+
+  whereIf(condition, conditions) {
+    return condition ? this.where(conditions) : this
   }
 
   orWhere(...conditions) {
@@ -95,6 +100,26 @@ export class Query {
 
   offset(n) {
     return this._clone({ offset: n })
+  }
+
+  dependsOn(...modelNames) {
+    return this._clone({
+      dependencies: [...this._state.dependencies, ...modelNames],
+    })
+  }
+
+  models() {
+    const result = []
+    if (this._model) result.push(this._model.name)
+    for (const { relation } of this._state.preloads) {
+      if (relation.withModel && !result.includes(relation.withModel)) {
+        result.push(relation.withModel)
+      }
+    }
+    for (const dep of this._state.dependencies) {
+      if (!result.includes(dep)) result.push(dep)
+    }
+    return result
   }
 
   // ============================================
@@ -182,7 +207,11 @@ export class Query {
 
     // No model or no triggers: fast path
     const hasTriggers = this._model && Object.keys(this._model.triggers).length > 0
-    if (!hasTriggers) return this._execUpdate(db, data)
+    if (!hasTriggers) {
+      const result = await this._execUpdate(db, data)
+      if (this._model) getEmitter()?.emit(this._model.name)
+      return result
+    }
 
     // SELECT affected IDs for trigger context
     const idQuery = this._clone({ select: [`${this._table}.id`], preloads: [] })
@@ -214,6 +243,7 @@ export class Query {
     // Batch after trigger
     await this._model._fireTrigger('afterUpdateMany', { ids, data: currentData, db })
 
+    getEmitter()?.emit(this._model.name)
     return result
   }
 
@@ -223,7 +253,11 @@ export class Query {
 
     // No model or no triggers: fast path
     const hasTriggers = this._model && Object.keys(this._model.triggers).length > 0
-    if (!hasTriggers) return this._execDelete(db)
+    if (!hasTriggers) {
+      const result = await this._execDelete(db)
+      if (this._model) getEmitter()?.emit(this._model.name)
+      return result
+    }
 
     // SELECT affected IDs for trigger context
     const idQuery = this._clone({ select: [`${this._table}.id`], preloads: [] })
@@ -252,6 +286,7 @@ export class Query {
     // Batch after trigger
     await this._model._fireTrigger('afterDeleteMany', { ids, db })
 
+    getEmitter()?.emit(this._model.name)
     return result
   }
 
@@ -338,8 +373,11 @@ export class Query {
     const parts = []
     const params = []
 
-    // SELECT
-    parts.push(`SELECT ${this._state.select.join(', ')}`)
+    // SELECT — scope to base table when using default * with joins
+    const hasJoins = this._state.joins.length > 0
+    const isDefaultSelect = this._state.select.length === 1 && this._state.select[0] === '*'
+    const selectClause = (hasJoins && isDefaultSelect) ? `${this._table}.*` : this._state.select.join(', ')
+    parts.push(`SELECT ${selectClause}`)
 
     // FROM
     parts.push(`FROM ${this._table}`)

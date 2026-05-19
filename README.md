@@ -18,10 +18,11 @@ A lightweight ORM and query builder for Expo SQLite, inspired by Ecto.
 - [Reset Database](#reset-database)
 - [Database Viewer](#database-viewer)
 
-**GraphQL Integration (optional)**
-- [GraphQL Integration](#graphql-integration)
-  - [GraphQLResolver](#graphqlresolver)
-  - [fromGraphQL](#fromgraphql)
+**Reactive Hooks**
+- [useQuery](#usequery)
+- [useCount](#usecount)
+- [useMutation](#usemutation)
+- [useCache](#usecache)
 
 ---
 
@@ -67,7 +68,7 @@ function MyComponent() {
 
 ## Models
 
-Models define your data structure and relationships. GraphQL integration is optional — see [GraphQL Integration](#graphql-integration) if you need it.
+Models define your data structure and relationships.
 
 ### Defining a Model
 
@@ -493,6 +494,12 @@ from(GoalModel)
 from(GoalModel)
   .where({ type: 'check' })
   .where({ color: 'green' })
+  .all(db)
+
+// Conditional where (only applied when condition is truthy)
+from(GoalModel)
+  .whereIf(type, { type })
+  .whereIf(date, { date: gte(date) })
   .all(db)
 
 // OR conditions (each argument is OR'd together)
@@ -937,6 +944,12 @@ const results = await raw(`
 const goal = await raw(
   'SELECT * FROM goal ORDER BY insertedAt DESC LIMIT 1'
 ).first(db)
+
+// Raw with dependsOn — declare model dependencies for reactive hooks
+// Without this, raw queries won't auto-refetch when models change
+const { data } = useQuery(
+  () => raw(`SELECT ... FROM goalUpdate ...`, goalId).dependsOn('goalUpdate')
+)
 ```
 
 ### Query Without Model
@@ -955,240 +968,208 @@ const logs = await table('audit_log')
 
 ---
 
-## GraphQL Integration
+## useQuery
 
-> **Optional.** Everything above works without GraphQL or Apollo. This section is only needed if you want to add a GraphQL API on top of your models. Requires `@apollo/client` as a peer dependency.
+Reactive data fetching hook backed by SQLite and an in-memory normalized cache. Queries automatically re-execute when mutations change their dependent models.
 
-NekoDB integrates with Apollo GraphQL. Models define their own typeDefs and resolvers, which are auto-collected for Apollo.
-
-### Setup
+### Basic Usage
 
 ```javascript
-// src/utils/apollo/schema.js
-import { gql } from '@apollo/client'
-import { models } from '../../data/models'
-import { collectTypeDefs } from '@neko-os/db'
+import { useQuery } from '@neko-os/db'
+import { PetModel } from '../data/models'
 
-const baseTypeDefs = gql`
-  type Query
-  type Mutation
-`
+function PetsList() {
+  const { data: pets, loading, error, refetch } = useQuery(() =>
+    PetModel.query().orderBy('name')
+  )
 
-export const typeDefs = [baseTypeDefs, ...collectTypeDefs(models)]
-```
-
-```javascript
-// src/utils/apollo/resolvers.js
-import { models } from '../../data/models'
-import { collectResolvers } from '@neko-os/db'
-
-export const resolvers = collectResolvers(models)
-```
-
-With this setup, adding a new model with `typeDefs` and `resolvers` to the models registry automatically includes them in Apollo.
-
-### GraphQLResolver
-
-Use `GraphQLResolver` to split queries and mutations into individual files. Each resolver defines its schema signature, optional extra types, and the resolver function.
-
-```javascript
-import { GraphQLResolver, fromGraphQL, getModel, raw } from '@neko-os/db'
-
-// Simple query
-export const goalsQuery = new GraphQLResolver({
-  schema: 'goals(initDate: [String]): [Goal!]!',
-  resolver: (_, args, { db }, info) => {
-    return fromGraphQL(getModel('goal'), info).all(db)
-  },
-})
-
-// Query with extra types
-export const monthlyProgressQuery = new GraphQLResolver({
-  schema: 'monthlyProgress(goalId: String, date: [String]): [MonthlyProgress!]!',
-  types: `type MonthlyProgress {
-    date: String!
-    progress: Int!
-  }`,
-  resolver: (_, { goalId, date }, { db }) => {
-    return raw(`SELECT ...`).all(db)
-  },
-})
-```
-
-Wire them into the model:
-
-```javascript
-import { Model, fields } from '@neko-os/db'
-import { goalsQuery } from './queries/goals'
-import { upsertGoalMutation } from './mutations/upsertGoal'
-
-export const GoalModel = new Model('goal', {
-  fields: { ... },
-  types: `
-    type Goal { id: String!, name: String! }
-    input GoalInput { name: String }
-  `,
-  queries: [goalsQuery],
-  mutations: [upsertGoalMutation],
-})
-```
-
-The Model constructor assembles `typeDefs` and `resolvers` from these parts automatically.
-
-#### Folder structure
-
-```
-src/data/models/
-  goal/
-    index.js          // re-exports GoalModel
-    model.js          // fields, types, wires queries/mutations
-    queries/
-      goals.js        // GraphQLResolver
-      goal.js
-    mutations/
-      upsertGoal.js   // GraphQLResolver
-      deleteGoal.js
-```
-
-#### Using getModel()
-
-Resolver files use `getModel()` to access models, avoiding circular imports:
-
-```javascript
-import { getModel } from '@neko-os/db'
-
-const GoalModel = getModel('goal')       // resolved at runtime
-const ReminderModel = getModel('reminder')
-```
-
-### fromGraphQL
-
-The `fromGraphQL` function reads the GraphQL query's selection set and:
-- Selects only requested fields
-- Auto-preloads relationships
-- Only fetches requested columns from related tables
-
-```javascript
-import { fromGraphQL } from '@neko-os/db'
-
-// In your model's resolvers
-resolvers: {
-  Query: {
-    goals: (_, args, { db }, info) => {
-      return fromGraphQL(GoalModel, info, {
-        where: args.where,
-        limit: args.limit,
-      }).all(db)
-    },
-
-    goal: (_, { id }, { db }, info) => {
-      return fromGraphQL(GoalModel, info, { where: { id } }).first(db)
-    },
-  },
+  if (loading) return <Loading />
+  return pets.map(pet => <PetCard key={pet.id} pet={pet} />)
 }
 ```
 
-### How It Works
-
-Given this GraphQL query:
-
-```graphql
-query {
-  goals {
-    id
-    name
-    category {
-      name
-      color
-    }
-  }
-}
-```
-
-NekoDB generates:
-
-```sql
--- Main query (only requested fields + FK)
-SELECT id, name, categoryId FROM goal
-
--- Preload query (only requested fields from related table)
-SELECT id, name, color FROM category WHERE id IN (?, ?, ?)
-```
-
-### Options
-
-`fromGraphQL(model, info, options)` accepts:
-
-| Option | Type | Description |
-|--------|------|-------------|
-| `where` | object | Filter conditions |
-| `orderBy` | array/object | Sorting: `['name', 'DESC']` or `{ field: 'name', direction: 'DESC' }` |
-| `limit` | number | Limit results |
-| `offset` | number | Skip results |
+### Single Record
 
 ```javascript
-fromGraphQL(GoalModel, info, {
-  where: { type: 'check', active: true },
-  orderBy: ['name', 'ASC'],
-  limit: 10,
-  offset: 20,
-}).all(db)
+import { useQueryFirst } from '@neko-os/db'
+
+const { data: pet } = useQueryFirst(
+  () => PetModel.query().where({ id }),
+  { variables: { id } }
+)
 ```
 
-### Schema Example
-
-```graphql
-type Query {
-  goals(where: GoalFilter, orderBy: OrderBy, limit: Int): [Goal!]!
-  goal(id: String!): Goal
-}
-
-type Goal {
-  id: String!
-  name: String!
-  color: String
-  type: String
-  category: Category
-  updates: [GoalUpdate!]!
-}
-
-type Category {
-  id: String!
-  name: String!
-  color: String
-  icon: String
-}
-
-input GoalFilter {
-  type: String
-  active: Boolean
-}
-
-input OrderBy {
-  field: String!
-  direction: String
-}
-```
-
-### Smart Preloading
-
-Relationships are automatically detected and preloaded:
-
-- **belongsTo**: Fetches parent record(s) via FK
-- **hasMany**: Fetches child records in batch
-- **hasOne**: Fetches single related record
-
-All preloads use batch loading (`IN` clauses) to prevent N+1 queries.
-
-### Manual Preload Selection
-
-You can also use smart preload selection without GraphQL:
+### With Preloaded Relationships
 
 ```javascript
-from(GoalModel)
-  .select('id', 'name')
-  .preload('category', { select: ['name', 'color'] })
-  .all(db)
+const { data: events } = useQuery(() =>
+  EventModel.query().preload('pet').orderBy('date', 'DESC')
+)
+// events[0].pet is auto-loaded
+```
+
+### Parameters
+
+| Param | Type | Description |
+|-------|------|-------------|
+| `queryFn` | `() => Query` | Returns a neko-db Query chain. Don't call `.all()`/`.first()` — execution handled internally. Use `useQueryFirst` for single records. |
+| `options.fetchPolicy` | `string` | `'cache-first'` (default), `'cache-and-network'`, `'network-only'`, `'cache-only'` |
+| `options.skip` | `boolean` | Skip execution when true |
+| `options.variables` | `object` | For cache key differentiation when query depends on external values |
+| `options.onCompleted` | `(data) => void` | Called after successful fetch |
+| `options.onError` | `(error) => void` | Called on error |
+
+### Returns
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `data` | `any` | Query result — array for `useQuery`, single object or `null` for `useQueryFirst` |
+| `loading` | `boolean` | `true` while fetching |
+| `error` | `Error \| null` | Error if query failed |
+| `refetch` | `() => Promise` | Force re-fetch from SQLite |
+
+### Fetch Policies
+
+| Policy | Behavior |
+|--------|----------|
+| `cache-first` | Return cache if available, otherwise fetch. Default. |
+| `cache-and-network` | Return cache immediately, also fetch in background. Re-render if data changed. |
+| `network-only` | Always fetch from SQLite, update cache. |
+| `cache-only` | Only return from cache, never touch SQLite. |
+
+### Auto-Reactivity
+
+`useQuery` detects which models the query touches (base model + preloaded relations). When any `Model.insert`, `update`, or `delete` fires on those models, the query automatically re-executes.
+
+```javascript
+// This query subscribes to both 'event' and 'pet' models
+const { data } = useQuery(() =>
+  EventModel.query().preload('pet')
+)
+
+// Any of these will trigger a re-fetch:
+await EventModel.insert(db, { ... })
+await PetModel.update(db, id, { name: 'New Name' })
+```
+
+No `refetchQueries` needed.
+
+---
+
+## useCount
+
+Reactive count hook. Wraps `useQueryFirst` with `SELECT COUNT(*)`.
+
+### Basic Usage
+
+```javascript
+import { useCount } from '@neko-os/db'
+
+function GoalStats() {
+  const { data: count, loading } = useCount(
+    () => GoalModel.query().where({ deleted: false })
+  )
+
+  return <Text>{count} active goals</Text>
+}
+```
+
+### Parameters
+
+Same as `useQueryFirst` — `queryFn` returns a Query chain (don't add `.select()` — `useCount` handles it).
+
+### Returns
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `data` | `number` | Count value (defaults to 0) |
+| `loading` | `boolean` | `true` while fetching |
+| `error` | `Error \| null` | Error if query failed |
+| `refetch` | `() => Promise` | Force re-fetch |
+
+Auto-reactive like `useQuery` — re-executes when the query's models change.
+
+---
+
+## useMutation
+
+Mutation hook for write operations.
+
+### Basic Usage
+
+```javascript
+import { useMutation } from '@neko-os/db'
+import { PetModel } from '../data/models'
+
+function EditPet() {
+  const db = useSQLiteContext()
+  const [savePet, { loading }] = useMutation(
+    (input) => PetModel.insert(db, input, { onConflict: { target: 'id', update: 'all' } })
+  )
+
+  const handleSave = () => savePet({ id, name, type })
+}
+```
+
+### Parameters
+
+| Param | Type | Description |
+|-------|------|-------------|
+| `mutationFn` | `(variables) => Promise` | The DB operation to execute |
+| `options.onCompleted` | `(data) => void` | Called after success |
+| `options.onError` | `(error) => void` | Called on error |
+| `options.invalidates` | `string[]` | Additional model names to emit change events for |
+| `options.update` | `(cache, { data }) => void` | Manual cache update function |
+
+### Returns
+
+`[executeFn, { data, loading, error, reset }]`
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `executeFn` | `(variables) => Promise` | Call to run the mutation |
+| `data` | `any` | Last mutation result |
+| `loading` | `boolean` | `true` while executing |
+| `error` | `Error \| null` | Error if mutation failed |
+| `reset` | `() => void` | Reset state to initial |
+
+### Auto-Invalidation
+
+Model write methods (`insert`, `update`, `delete`) automatically emit change events. All `useQuery` hooks subscribed to that model re-execute. No manual `refetchQueries` needed.
+
+Use `invalidates` for side effects that touch models the mutation doesn't directly write to:
+
+```javascript
+const [archivePet, state] = useMutation(
+  (id) => PetModel.update(db, id, { archived: true }),
+  { invalidates: ['event'] }  // also refresh event queries
+)
+```
+
+---
+
+## useCache
+
+Direct cache access for edge cases.
+
+```javascript
+import { useCache } from '@neko-os/db'
+
+function MyComponent() {
+  const cache = useCache()
+
+  // Read a single entity from cache
+  const pet = cache.read('pet', 'abc-123')
+
+  // Write to cache + notify subscribers
+  cache.write('pet', 'abc-123', { id: 'abc-123', name: 'Updated' })
+
+  // Invalidate all queries touching a model
+  cache.invalidate('pet')
+
+  // Invalidate everything
+  cache.invalidateAll()
+}
 ```
 
 ---
@@ -1263,16 +1244,24 @@ Shows all rows in a model's table as formatted JSON. Receives the model name via
 
 ```
 @neko-os/db
-├── index.js           # Exports
-├── models.js          # Model class, fields, GraphQLResolver
-├── query.js           # Query builder
-├── operators.js       # Comparison operators (gt, gte, lt, lte, ne, like, notLike, notIn)
-├── migrator.js        # Migration runner
-├── graphql.js         # GraphQL integration (optional)
-├── NekoDB.js          # React provider (SQLiteProvider wrapper)
+├── index.js             # Exports
+├── models.js            # Model class, model registry, emitter bridge
+├── query.js             # Query builder
+├── fields.js            # Field type definitions (string, int, bool, json, date, relationships)
+├── operators.js         # Comparison operators (gt, gte, lt, lte, ne, like, notLike, notIn)
+├── migrator.js          # Migration runner
+├── NekoDB.js            # React provider (SQLite + cache context)
+├── CacheProvider.js     # React context for normalized cache + emitter
+├── EmitterBridge.js     # Syncs emitter from React context to module scope
+├── cache.js             # Normalized entity cache (in-memory)
+├── emitter.js           # Model change pub/sub
+├── hooks/
+│   ├── useQuery.js      # Reactive query hook
+│   ├── useMutation.js   # Mutation hook
+│   └── useCache.js      # Direct cache access hook
 └── views/
-    ├── ModelListView.js   # Dev: browse models
-    └── ModelDataView.js   # Dev: inspect table data
+    ├── ModelListView.js # Dev: browse models
+    └── ModelDataView.js # Dev: inspect table data
 ```
 
 ---
@@ -1285,6 +1274,7 @@ Shows all rows in a model's table as formatted JSON. Receives the model name via
 |--------|-------------|
 | `select(...fields)` | Columns to select |
 | `where(conditions)` | Filter conditions (AND) |
+| `whereIf(condition, conditions)` | Conditional where — only applied when condition is truthy |
 | `orWhere(...conditions)` | Filter conditions (OR) |
 | `join(relation, type?)` | JOIN via model relationship |
 | `joinTable(table, on, type?)` | Explicit JOIN |
@@ -1292,6 +1282,8 @@ Shows all rows in a model's table as formatted JSON. Receives the model name via
 | `orderBy(field, direction?)` | Sort results |
 | `limit(n)` | Limit rows |
 | `offset(n)` | Skip rows |
+| `dependsOn(...modelNames)` | Declare model dependencies for raw queries (used by reactive hooks) |
+| `models()` | Returns model names this query touches (base + preloads + dependencies) |
 
 ### Query Methods (Execution)
 
@@ -1329,6 +1321,16 @@ Shows all rows in a model's table as formatted JSON. Receives the model name via
 | `update(db, id, data)` | Update by ID |
 | `delete(db, id)` | Delete by ID |
 
+### Hooks
+
+| Hook | Description |
+|------|-------------|
+| `useQuery(queryFn, options?)` | Reactive list query — `{ data, loading, error, refetch }` |
+| `useQueryFirst(queryFn, options?)` | Reactive single-record query — `{ data, loading, error, refetch }` |
+| `useCount(queryFn, options?)` | Reactive count — `{ data: number, loading, error, refetch }` |
+| `useMutation(mutationFn, options?)` | Mutation — `[executeFn, { data, loading, error, reset }]` |
+| `useCache()` | Direct cache access — `{ read, write, invalidate, invalidateAll }` |
+
 ### Utility Functions
 
 | Function | Description |
@@ -1336,5 +1338,3 @@ Shows all rows in a model's table as formatted JSON. Receives the model name via
 | `generateId()` | Generate a UUID v4 string for use as a primary key |
 | `resetDatabase(db)` | Drop all tables and reset schema version |
 | `runMigrations(db, migrations)` | Run pending migrations |
-| `collectTypeDefs(models)` | Aggregate typeDefs from registered models |
-| `collectResolvers(models)` | Aggregate resolvers from registered models |

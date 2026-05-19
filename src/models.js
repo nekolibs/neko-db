@@ -18,68 +18,22 @@ export function registerModels(modelList) {
 
 import { generateUUIDv7 } from './utils/uuid'
 
+let _emitter = null
+
+export function setEmitter(emitter) {
+  _emitter = emitter
+}
+
+export function getEmitter() {
+  return _emitter
+}
+
 export class Model {
-  constructor(name, { fields, typeDefs = null, resolvers = null, types = null, queries = null, mutations = null, triggers = null, timestamps = true }) {
+  constructor(name, { fields, triggers = null, timestamps = true }) {
     this.name = name
     this.fields = fields
     this.triggers = triggers || {}
     this.timestamps = timestamps
-
-    if (queries || mutations) {
-      this.typeDefs = this._buildTypeDefs(types, queries, mutations)
-      this.resolvers = this._buildResolvers(queries, mutations)
-    } else {
-      this.typeDefs = typeDefs
-      this.resolvers = resolvers
-    }
-  }
-
-  _buildTypeDefs(types, queries, mutations) {
-    const { gql } = require('@apollo/client')
-    const parts = []
-
-    if (types) parts.push(types)
-
-    const querySchemas = (queries || []).map((q) => q.schema)
-    const mutationSchemas = (mutations || []).map((m) => m.schema)
-
-    if (querySchemas.length) {
-      parts.push(`extend type Query {\n${querySchemas.map((s) => `    ${s}`).join('\n')}\n  }`)
-    }
-    if (mutationSchemas.length) {
-      parts.push(`extend type Mutation {\n${mutationSchemas.map((s) => `    ${s}`).join('\n')}\n  }`)
-    }
-
-    const extraTypes = [...(queries || []), ...(mutations || [])]
-      .map((r) => r.types)
-      .filter(Boolean)
-
-    if (extraTypes.length) parts.push(...extraTypes)
-
-    if (!parts.length) return null
-    return gql(parts.join('\n\n'))
-  }
-
-  _buildResolvers(queries, mutations) {
-    const result = {}
-
-    if (queries?.length) {
-      result.Query = {}
-      for (const q of queries) {
-        const name = q.schema.match(/^\s*(\w+)/)[1]
-        result.Query[name] = q.resolver
-      }
-    }
-
-    if (mutations?.length) {
-      result.Mutation = {}
-      for (const m of mutations) {
-        const name = m.schema.match(/^\s*(\w+)/)[1]
-        result.Mutation[name] = m.resolver
-      }
-    }
-
-    return Object.keys(result).length ? result : null
   }
 
   _applyTimestamps(data, isInsert = false) {
@@ -164,6 +118,7 @@ export class Model {
     // Batch after trigger
     await this._fireTrigger(`after${op}Many`, { data: [item], results: [result], db })
 
+    _emitter?.emit(this.name)
     return result
   }
 
@@ -181,7 +136,9 @@ export class Model {
 
     // Fast path: no triggers
     if (!hasTriggers) {
-      return Query.insertMany(db, this, dataArray.map((d) => this._serialize(d)), options)
+      const results = await Query.insertMany(db, this, dataArray.map((d) => this._serialize(d)), options)
+      _emitter?.emit(this.name)
+      return results
     }
 
     // Batch before trigger
@@ -206,6 +163,7 @@ export class Model {
     // Batch after trigger
     await this._fireTrigger(`after${op}Many`, { data: items, results, db })
 
+    _emitter?.emit(this.name)
     return results
   }
 
@@ -231,6 +189,7 @@ export class Model {
     // Batch after trigger
     await this._fireTrigger('afterUpdateMany', { ids: [id], data: currentData, db })
 
+    _emitter?.emit(this.name)
     return result
   }
 
@@ -250,6 +209,7 @@ export class Model {
     // Batch after trigger
     await this._fireTrigger('afterDeleteMany', { ids: [id], db })
 
+    _emitter?.emit(this.name)
     return result
   }
 }
