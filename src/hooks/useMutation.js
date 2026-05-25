@@ -1,9 +1,11 @@
 import { useCallback, useRef, useState } from 'react'
+import { useSQLiteContext } from 'expo-sqlite'
 
 import { useCacheContext } from '../CacheProvider'
 
 export function useMutation(mutationFn, options = {}) {
   const { onCompleted, onError, invalidates, update } = options
+  const db = useSQLiteContext()
   const { cache, emitter } = useCacheContext()
 
   const [state, setState] = useState({ data: null, loading: false, error: null })
@@ -16,7 +18,7 @@ export function useMutation(mutationFn, options = {}) {
     setState((prev) => ({ ...prev, loading: true, error: null }))
 
     try {
-      const data = await mutationFn(variables)
+      const data = await mutationFn(variables, db)
 
       if (update) {
         update(cache, { data })

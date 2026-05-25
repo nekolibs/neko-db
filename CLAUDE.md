@@ -18,7 +18,7 @@ NekoDB wraps `SQLiteProvider` + `CacheProvider`. Cache and emitter live in React
 
 - **ModelEmitter** (`emitter.js`): pub/sub by model name. `subscribe(modelName, cb)` returns unsubscribe fn.
 - **NormalizedCache** (`cache.js`): entities keyed by `modelName:id`. Queries stored with model list + entity refs. Normalize flattens relationships, denormalize reassembles (including dayjs conversion for date fields).
-- **useQuery**: builds cache key from SQL + params + variables. Subscribes to all models the query touches (via `Query.models()`). On model emit, re-executes query from SQLite.
+- **useQuery**: builds cache key from SQL + params + watch. Subscribes to all models the query touches (via `Query.models()`). On model emit, re-executes query from SQLite.
 - **useMutation**: wraps a DB operation. Model methods auto-emit on write. `invalidates` option for additional models.
 
 ### Emit wiring
@@ -30,11 +30,11 @@ Every write path emits after success:
 
 ### Query key
 
-Built from SQL + params + optional `variables` object. For model queries uses `_buildSelect()`. For raw queries uses `rawSQL` + `rawParams` directly. Same key = same cache entry.
+Built from SQL + params + optional `watch` object. For model queries uses `_buildSelect()`. For raw queries uses `rawSQL` + `rawParams` directly. Same key = same cache entry.
 
 ### queryFn contract
 
-`queryFn` returns a Query chain — must NOT call `.all()` or `.first()` (those need `db`). Hook calls `.all(db)` internally. Three hooks: `useQuery` (returns array), `useQueryFirst` (adds `.limit(1)` internally, returns single object or null), `useCount` (adds `.select('COUNT(*) as count')`, returns number). All share `useBaseQuery`.
+`queryFn` receives `watch` object and returns a Query chain — must NOT call `.all()` or `.first()` (those need `db`). Hook calls `.all(db)` internally. Three hooks: `useQuery` (returns array), `useQueryFirst` (adds `.limit(1)` internally, returns single object or null), `useCount` (adds `.select('COUNT(*) as count')`, returns number). All share `useBaseQuery`.
 
 ## Key Files
 

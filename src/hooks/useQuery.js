@@ -3,9 +3,9 @@ import { useSQLiteContext } from 'expo-sqlite'
 
 import { useCacheContext } from '../CacheProvider'
 
-function computeQueryKey(queryFn, variables, prefix) {
+function computeQueryKey(queryFn, watch, prefix) {
   try {
-    const query = queryFn()
+    const query = queryFn(watch)
     let sql, params
     if (query._state?.rawSQL) {
       sql = query._state.rawSQL
@@ -14,57 +14,57 @@ function computeQueryKey(queryFn, variables, prefix) {
       ;({ sql, params } = query._buildSelect())
     }
     const base = (prefix || '') + sql + '|' + JSON.stringify(params)
-    if (variables) return base + '|' + JSON.stringify(variables)
+    if (watch) return base + '|' + JSON.stringify(watch)
     return base
   } catch {
     return null
   }
 }
 
-function getQueryModels(queryFn) {
+function getQueryModels(queryFn, watch) {
   try {
-    return queryFn().models()
+    return queryFn(watch).models()
   } catch {
     return []
   }
 }
 
 function useBaseQuery(queryFn, options, single) {
-  const { fetchPolicy = 'cache-first', skip = false, onCompleted, onError, variables } = options
+  const { fetchPolicy = 'cache-first', skip = false, onCompleted, onError, watch } = options
   const db = useSQLiteContext()
   const { cache, emitter } = useCacheContext()
 
   const [state, setState] = useState({ data: null, loading: !skip, error: null })
   const mountedRef = useRef(true)
   const queryFnRef = useRef(queryFn)
-  const variablesRef = useRef(variables)
+  const watchRef = useRef(watch)
   const dbRef = useRef(db)
   const cacheRef = useRef(cache)
   const onCompletedRef = useRef(onCompleted)
   const onErrorRef = useRef(onError)
 
   queryFnRef.current = queryFn
-  variablesRef.current = variables
+  watchRef.current = watch
   dbRef.current = db
   cacheRef.current = cache
   onCompletedRef.current = onCompleted
   onErrorRef.current = onError
 
   const prefix = single ? 'first|' : ''
-  const queryKey = skip ? null : computeQueryKey(queryFn, variables, prefix)
+  const queryKey = skip ? null : computeQueryKey(queryFn, watch, prefix)
   const queryKeyRef = useRef(queryKey)
   queryKeyRef.current = queryKey
 
   const execute = useCallback(async () => {
     const fn = queryFnRef.current
-    const vars = variablesRef.current
+    const w = watchRef.current
     const currentDb = dbRef.current
     const currentCache = cacheRef.current
-    const key = computeQueryKey(fn, vars, prefix)
+    const key = computeQueryKey(fn, w, prefix)
     if (!key) return
 
     try {
-      const query = fn()
+      const query = fn(w)
       const models = query.models()
       let data
 
@@ -130,7 +130,7 @@ function useBaseQuery(queryFn, options, single) {
   useEffect(() => {
     if (skip) return
 
-    const models = getQueryModels(queryFnRef.current)
+    const models = getQueryModels(queryFnRef.current, watchRef.current)
     if (!models.length) return
 
     const unsubscribes = models.map((model) =>
@@ -168,7 +168,7 @@ export function useQueryFirst(queryFn, options = {}) {
 
 export function useCount(queryFn, options = {}) {
   const result = useBaseQuery(
-    () => queryFn().select('COUNT(*) as count'),
+    (watch) => queryFn(watch).select('COUNT(*) as count'),
     options,
     true
   )

@@ -994,8 +994,8 @@ function PetsList() {
 import { useQueryFirst } from '@neko-os/db'
 
 const { data: pet } = useQueryFirst(
-  () => PetModel.query().where({ id }),
-  { variables: { id } }
+  ({ id }) => PetModel.query().where({ id }),
+  { watch: { id } }
 )
 ```
 
@@ -1012,10 +1012,10 @@ const { data: events } = useQuery(() =>
 
 | Param | Type | Description |
 |-------|------|-------------|
-| `queryFn` | `() => Query` | Returns a neko-db Query chain. Don't call `.all()`/`.first()` — execution handled internally. Use `useQueryFirst` for single records. |
+| `queryFn` | `(watch) => Query` | Receives `watch` object, returns a neko-db Query chain. Don't call `.all()`/`.first()` — execution handled internally. Use `useQueryFirst` for single records. |
 | `options.fetchPolicy` | `string` | `'cache-first'` (default), `'cache-and-network'`, `'network-only'`, `'cache-only'` |
 | `options.skip` | `boolean` | Skip execution when true |
-| `options.variables` | `object` | For cache key differentiation when query depends on external values |
+| `options.watch` | `object` | Dependencies passed to `queryFn` and appended to cache key. Query re-runs when watch values change. |
 | `options.onCompleted` | `(data) => void` | Called after successful fetch |
 | `options.onError` | `(error) => void` | Called on error |
 
@@ -1115,7 +1115,7 @@ function EditPet() {
 
 | Param | Type | Description |
 |-------|------|-------------|
-| `mutationFn` | `(variables) => Promise` | The DB operation to execute |
+| `mutationFn` | `(input) => Promise` | The DB operation to execute |
 | `options.onCompleted` | `(data) => void` | Called after success |
 | `options.onError` | `(error) => void` | Called on error |
 | `options.invalidates` | `string[]` | Additional model names to emit change events for |
@@ -1127,7 +1127,7 @@ function EditPet() {
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `executeFn` | `(variables) => Promise` | Call to run the mutation |
+| `executeFn` | `(input) => Promise` | Call to run the mutation |
 | `data` | `any` | Last mutation result |
 | `loading` | `boolean` | `true` while executing |
 | `error` | `Error \| null` | Error if mutation failed |
