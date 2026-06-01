@@ -30,7 +30,7 @@ function getQueryModels(queryFn, watch) {
 }
 
 function useBaseQuery(queryFn, options, single) {
-  const { fetchPolicy = 'cache-first', skip = false, onCompleted, onError, watch } = options
+  const { fetchPolicy = 'cache-first', skip = false, onCompleted, onError, watch, dependsOn } = options
   const db = useSQLiteContext()
   const { cache, emitter } = useCacheContext()
 
@@ -42,6 +42,7 @@ function useBaseQuery(queryFn, options, single) {
   const cacheRef = useRef(cache)
   const onCompletedRef = useRef(onCompleted)
   const onErrorRef = useRef(onError)
+  const dependsOnRef = useRef(dependsOn)
 
   queryFnRef.current = queryFn
   watchRef.current = watch
@@ -49,6 +50,7 @@ function useBaseQuery(queryFn, options, single) {
   cacheRef.current = cache
   onCompletedRef.current = onCompleted
   onErrorRef.current = onError
+  dependsOnRef.current = dependsOn
 
   const prefix = single ? 'first|' : ''
   const queryKey = skip ? null : computeQueryKey(queryFn, watch, prefix)
@@ -75,7 +77,7 @@ function useBaseQuery(queryFn, options, single) {
         data = await query.all(currentDb)
       }
 
-      currentCache.storeQueryResult(key, models, data)
+      currentCache.storeQueryResult(key, models, data, dependsOnRef.current)
 
       if (mountedRef.current) {
         setState({ data, loading: false, error: null })
@@ -130,7 +132,9 @@ function useBaseQuery(queryFn, options, single) {
   useEffect(() => {
     if (skip) return
 
-    const models = getQueryModels(queryFnRef.current, watchRef.current)
+    const queryModels = getQueryModels(queryFnRef.current, watchRef.current)
+    const extra = dependsOnRef.current
+    const models = extra?.length ? [...new Set([...queryModels, ...extra])] : queryModels
     if (!models.length) return
 
     const unsubscribes = models.map((model) =>
@@ -142,6 +146,7 @@ function useBaseQuery(queryFn, options, single) {
             if (mountedRef.current) setState({ data: cached ?? null, loading: false, error: null })
           }
         } else {
+          cacheRef.current.invalidateModel(model)
           execute()
         }
       })

@@ -92,19 +92,31 @@ export class NormalizedCache {
     return result
   }
 
-  storeQueryResult(queryKey, models, rows) {
+  storeQueryResult(queryKey, models, rows, dependsOn) {
     const primaryModel = models[0]
+    const isSingle = !Array.isArray(rows)
     const list = Array.isArray(rows) ? rows : rows != null ? [rows] : []
-    const entityRefs = list.filter((r) => r?.id).map((r) => this._entityKey(primaryModel, r.id))
 
-    this.normalize(primaryModel, list)
+    // Raw queries (no model) — store results directly, can't normalize without entity ids
+    if (!primaryModel) {
+      this.queries[queryKey] = { models, raw: true, data: isSingle ? (list[0] ?? null) : list, isSingle }
+    } else {
+      const entityRefs = list.filter((r) => r?.id).map((r) => this._entityKey(primaryModel, r.id))
+      this.normalize(primaryModel, list)
+      this.queries[queryKey] = { models, entityRefs, isSingle }
+    }
 
-    this.queries[queryKey] = { models, entityRefs, isSingle: !Array.isArray(rows) }
+    if (dependsOn?.length) {
+      this.queries[queryKey].dependsOn = dependsOn
+    }
   }
 
   readQueryResult(queryKey) {
     const entry = this.queries[queryKey]
     if (!entry) return undefined
+
+    // Raw queries — return stored data directly
+    if (entry.raw) return entry.data
 
     const { models, entityRefs, isSingle } = entry
     const primaryModel = models[0]
@@ -126,7 +138,7 @@ export class NormalizedCache {
   invalidateModel(modelName) {
     const toDelete = []
     for (const [key, entry] of Object.entries(this.queries)) {
-      if (entry.models.includes(modelName)) {
+      if (entry.models.includes(modelName) || entry.dependsOn?.includes(modelName)) {
         toDelete.push(key)
       }
     }

@@ -24,7 +24,6 @@ export class Query {
       offset: state.offset ?? null,
       rawSQL: state.rawSQL ?? null,
       rawParams: state.rawParams ?? [],
-      dependencies: state.dependencies ?? [],
     }
   }
 
@@ -102,12 +101,6 @@ export class Query {
     return this._clone({ offset: n })
   }
 
-  dependsOn(...modelNames) {
-    return this._clone({
-      dependencies: [...this._state.dependencies, ...modelNames],
-    })
-  }
-
   models() {
     const result = []
     if (this._model) result.push(this._model.name)
@@ -115,9 +108,6 @@ export class Query {
       if (relation.withModel && !result.includes(relation.withModel)) {
         result.push(relation.withModel)
       }
-    }
-    for (const dep of this._state.dependencies) {
-      if (!result.includes(dep)) result.push(dep)
     }
     return result
   }
