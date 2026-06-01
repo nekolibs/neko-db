@@ -945,10 +945,10 @@ const goal = await raw(
   'SELECT * FROM goal ORDER BY insertedAt DESC LIMIT 1'
 ).first(db)
 
-// Raw with dependsOn — declare model dependencies for reactive hooks
-// Without this, raw queries won't auto-refetch when models change
+// Raw queries have no model — use dependsOn hook option for reactivity
 const { data } = useQuery(
-  () => raw(`SELECT ... FROM goalUpdate ...`, goalId).dependsOn('goalUpdate')
+  () => raw(`SELECT ... FROM goalUpdate ...`, goalId),
+  { dependsOn: ['goalUpdate'] }
 )
 ```
 
@@ -1016,6 +1016,7 @@ const { data: events } = useQuery(() =>
 | `options.fetchPolicy` | `string` | `'cache-first'` (default), `'cache-and-network'`, `'network-only'`, `'cache-only'` |
 | `options.skip` | `boolean` | Skip execution when true |
 | `options.watch` | `object` | Dependencies passed to `queryFn` and appended to cache key. Query re-runs when watch values change. |
+| `options.dependsOn` | `string[]` | Model names to subscribe to for reactivity. Use with `raw()` queries that have no auto-detected model. |
 | `options.onCompleted` | `(data) => void` | Called after successful fetch |
 | `options.onError` | `(error) => void` | Called on error |
 
@@ -1282,8 +1283,7 @@ Shows all rows in a model's table as formatted JSON. Receives the model name via
 | `orderBy(field, direction?)` | Sort results |
 | `limit(n)` | Limit rows |
 | `offset(n)` | Skip rows |
-| `dependsOn(...modelNames)` | Declare model dependencies for raw queries (used by reactive hooks) |
-| `models()` | Returns model names this query touches (base + preloads + dependencies) |
+| `models()` | Returns model names this query touches (base + preloads) |
 
 ### Query Methods (Execution)
 

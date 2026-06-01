@@ -18,7 +18,7 @@ NekoDB wraps `SQLiteProvider` + `CacheProvider`. Cache and emitter live in React
 
 - **ModelEmitter** (`emitter.js`): pub/sub by model name. `subscribe(modelName, cb)` returns unsubscribe fn.
 - **NormalizedCache** (`cache.js`): entities keyed by `modelName:id`. Queries stored with model list + entity refs. Normalize flattens relationships, denormalize reassembles (including dayjs conversion for date fields).
-- **useQuery**: builds cache key from SQL + params + watch. Subscribes to all models the query touches (via `Query.models()`). On model emit, re-executes query from SQLite.
+- **useQuery**: builds cache key from SQL + params + watch. Subscribes to all models the query touches (via `Query.models()`) plus any `dependsOn` option. On model emit, re-executes query from SQLite.
 - **useMutation**: wraps a DB operation. Model methods auto-emit on write. `invalidates` option for additional models.
 
 ### Emit wiring
@@ -41,7 +41,7 @@ Built from SQL + params + optional `watch` object. For model queries uses `_buil
 | File | Purpose |
 |------|---------|
 | `models.js` | Model class, registry (`getModel`/`registerModels`), emitter bridge (`setEmitter`/`getEmitter`) |
-| `query.js` | Immutable chainable query builder. `models()` returns touched model names. `whereIf()` for conditional filters. `dependsOn()` for raw query model deps. |
+| `query.js` | Immutable chainable query builder. `models()` returns touched model names. `whereIf()` for conditional filters. |
 | `fields.js` | Field types: string, int, bool, json, date (with dayjs serialize), belongsTo, hasMany, hasOne |
 | `cache.js` | `NormalizedCache` — normalize/denormalize entities, query result storage |
 | `emitter.js` | `ModelEmitter` — simple pub/sub |
