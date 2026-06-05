@@ -42,7 +42,7 @@ Built from SQL + params + optional `watch` object. For model queries uses `_buil
 |------|---------|
 | `models.js` | Model class, registry (`getModel`/`registerModels`), emitter bridge (`setEmitter`/`getEmitter`) |
 | `query.js` | Immutable chainable query builder. `models()` returns touched model names. `whereIf()` for conditional filters. |
-| `fields.js` | Field types: string, int, bool, json, date (with dayjs serialize), belongsTo, hasMany, hasOne |
+| `fields.js` | Field types: string, int, bool, json, date (dayjs serialize), belongsTo, hasMany, hasOne. Each takes one options object; `hasMany` supports `{ polymorphic }` |
 | `cache.js` | `NormalizedCache` — normalize/denormalize entities, query result storage |
 | `emitter.js` | `ModelEmitter` — simple pub/sub |
 | `CacheProvider.js` | React context providing `{ cache, emitter }` |
@@ -56,7 +56,8 @@ Built from SQL + params + optional `watch` object. For model queries uses `_buil
 
 - Query builder is immutable — every chainable method returns a new Query via `_clone()`
 - `db` comes from `useSQLiteContext()` (expo-sqlite). Hooks get it internally; Model methods receive it as first arg.
-- Relationships: `belongsTo` stores FK as `{relationName}Id` on the owning model. `hasMany`/`hasOne` look up by `{parentModel}Id` on the related model.
+- Relationships: `belongsTo` stores FK as `{relationName}Id` on the owning model. `hasMany`/`hasOne` look up by `{parentModel}Id` on the related model. Polymorphic `hasMany(model, { polymorphic: 'base' })` looks up by `{base}Type`/`{base}Id` instead, where `{base}Type` = the parent's table name (preload-only, no join).
+- Field helpers take a single options object: `fields.string({ required: true })`. `required`/`default` are descriptive only — constraints live in migration SQL. NekoDB acts on `serialize`/`deserialize`, `withModel`, and `polymorphic`.
 - `fields.date` serializes dayjs → `'YYYY-MM-DD'` for SQLite. Cache denormalize converts back to dayjs.
 - Triggers receive raw JS data (before serialization). Serialization happens after triggers.
 - Models with no triggers get fast-path writes (no extra SELECT for affected IDs).

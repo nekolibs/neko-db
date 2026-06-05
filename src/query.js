@@ -526,7 +526,9 @@ export class Query {
   }
 
   async _hydrateResults(db, rows) {
-    if (this._state.preloads.length === 0 || !this._model) {
+    // No parent rows -> nothing to hydrate. Also avoids building an invalid
+    // `IN ()` clause in the hasMany/hasOne preload paths.
+    if (this._state.preloads.length === 0 || !this._model || rows.length === 0) {
       return rows
     }
 
@@ -559,17 +561,27 @@ export class Query {
         }
       } else if (relation.type === 'hasMany') {
         const ids = rows.map((r) => r.id)
-        const fkField = `${this._table}Id`
+        const placeholders = ids.map(() => '?').join(', ')
 
-        // Include FK field in select for hasMany
+        // Polymorphic: child has `${base}Type` / `${base}Id` columns. The type
+        // value is this model's table name (e.g. 'event'). Otherwise plain FK.
+        const isPoly = !!relation.polymorphic
+        const fkField = isPoly ? `${relation.polymorphic}Id` : `${this._table}Id`
+        const typeField = isPoly ? `${relation.polymorphic}Type` : null
+
+        // Include FK (and type) field in select for hasMany
+        const baseCols = isPoly ? ['id', typeField, fkField] : ['id', fkField]
         const hasManySelect = select
-          ? ['id', fkField, ...select].filter((v, i, a) => a.indexOf(v) === i).join(', ')
+          ? [...baseCols, ...select].filter((v, i, a) => a.indexOf(v) === i).join(', ')
           : '*'
 
-        const placeholders = ids.map(() => '?').join(', ')
+        const where = isPoly
+          ? `${typeField} = ? AND ${fkField} IN (${placeholders})`
+          : `${fkField} IN (${placeholders})`
+        const params = isPoly ? [this._table, ...ids] : ids
         const related = await db.getAllAsync(
-          `SELECT ${hasManySelect} FROM ${relatedModel.name} WHERE ${fkField} IN (${placeholders})`,
-          ...ids
+          `SELECT ${hasManySelect} FROM ${relatedModel.name} WHERE ${where}`,
+          ...params
         )
         if (relatedModel._deserialize) related.forEach((r) => relatedModel._deserialize(r))
 

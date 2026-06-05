@@ -97,10 +97,13 @@ export const GoalModel = new Model('goal', {
 | `fields.string()` | Text field |
 | `fields.int()` | Integer field |
 | `fields.bool()` | Boolean field |
+| `fields.date()` | Date field — dayjs ⇄ `'YYYY-MM-DD'` string |
 | `fields.json()` | JSON field — stored as TEXT, auto-serialized/deserialized |
-| `fields.belongsTo(model)` | Many-to-one relationship |
-| `fields.hasMany(model)` | One-to-many relationship |
-| `fields.hasOne(model)` | One-to-one relationship |
+| `fields.belongsTo(model, opts?)` | Many-to-one relationship |
+| `fields.hasMany(model, opts?)` | One-to-many relationship (supports `opts.polymorphic`) |
+| `fields.hasOne(model, opts?)` | One-to-one relationship |
+
+Each helper takes a single options object — e.g. `fields.string({ required: true })`, `fields.int({ default: 0 })`. Note that `required` and `default` are **descriptive metadata**: the actual column constraints (NOT NULL, defaults) live in the migration SQL, which is the source of truth. The options NekoDB acts on are `serialize`/`deserialize` (see below) and relationship options (`polymorphic`).
 
 ### Field Serialization
 
@@ -812,6 +815,39 @@ updates: fields.hasMany('goalUpdate')
 profile: fields.hasOne('profile')
 ```
 
+### Polymorphic Relationships
+
+A `hasMany` can be **polymorphic** — the related table attaches to *any* model through two columns (`{base}Type` + `{base}Id`) instead of a dedicated foreign key. One table (e.g. `document`) can then hold rows for events, pets, anything. Pass `{ polymorphic: '<base>' }`:
+
+```javascript
+// On each owner model — e.g. EventModel, PetModel:
+documents: fields.hasMany('document', { polymorphic: 'resource' })
+```
+
+The related table needs `{base}Type` / `{base}Id` columns (index them together):
+
+```sql
+CREATE TABLE document (
+  id TEXT PRIMARY KEY,
+  resourceType TEXT NOT NULL,   -- owner's table name, e.g. 'event'
+  resourceId TEXT NOT NULL,     -- owner's id
+  uri TEXT NOT NULL
+);
+CREATE INDEX idx_document_resource ON document (resourceType, resourceId);
+```
+
+When writing rows, set `{base}Type` to the **owner model's table name** and `{base}Id` to its id:
+
+```javascript
+await DocumentModel.insert(db, {
+  resourceType: 'event',
+  resourceId: event.id,
+  uri: '...',
+})
+```
+
+`preload('documents')` resolves them with `WHERE resourceType = '<ownerTable>' AND resourceId IN (...)`, grouping per owner. Polymorphic relations are **preload-only** — `join()` isn't supported (there's no single FK to join on).
+
 ### JOIN (SQL Join)
 
 Use `join()` when you need to filter or select from related tables.
@@ -875,6 +911,11 @@ goals.forEach(goal => {
 const goals = await from(GoalModel)
   .preload('category')
   .preload('updates')
+  .all(db)
+
+// Preload a polymorphic hasMany (see Polymorphic Relationships)
+const events = await from(EventModel)
+  .preload('documents')
   .all(db)
 ```
 

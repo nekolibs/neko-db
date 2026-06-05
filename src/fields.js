@@ -1,11 +1,11 @@
 import dayjs from 'dayjs'
 
 export const fields = {
-  string(...props) {
+  string(props = {}) {
     return { type: 'string', ...props }
   },
 
-  date(...props) {
+  date(props = {}) {
     return {
       type: 'date',
       serialize: (v) => (v != null ? dayjs(v).format('YYYY-MM-DD') : null),
@@ -14,7 +14,7 @@ export const fields = {
     }
   },
 
-  int(...props) {
+  int(props = {}) {
     return {
       type: 'int',
       deserialize: (v) => (v != null ? Math.round(v) : v),
@@ -22,11 +22,11 @@ export const fields = {
     }
   },
 
-  bool(...props) {
+  bool(props = {}) {
     return { type: 'bool', ...props }
   },
 
-  json(...props) {
+  json(props = {}) {
     return {
       type: 'json',
       serialize: (v) => (v != null ? JSON.stringify(v) : null),
@@ -35,15 +35,15 @@ export const fields = {
     }
   },
 
-  belongsTo(name, ...props) {
+  belongsTo(name, props = {}) {
     return { type: 'belongsTo', withModel: name, ...props }
   },
 
-  hasMany(name, ...props) {
+  hasMany(name, props = {}) {
     return { type: 'hasMany', withModel: name, ...props }
   },
 
-  hasOne(name, ...props) {
+  hasOne(name, props = {}) {
     return { type: 'hasOne', withModel: name, ...props }
   },
 }
