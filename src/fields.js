@@ -22,6 +22,10 @@ export const fields = {
     }
   },
 
+  float(props = {}) {
+    return { type: 'float', ...props }
+  },
+
   bool(props = {}) {
     return { type: 'bool', ...props }
   },
