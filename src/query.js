@@ -72,19 +72,45 @@ export class Query {
     })
   }
 
-  preload(relationName, options = {}) {
+  // Supports nested relations via dot paths, e.g. preload('pet.avatar').
+  // The first segment is a relation on this model; the rest is preloaded on the
+  // related model. Calls targeting the same relation merge (nested paths accrue).
+  preload(path, options = {}) {
     if (!this._model) {
       throw new Error('preload() requires a model.')
     }
 
+    const [relationName, ...rest] = path.split('.')
     const relation = this._model.fields[relationName]
     if (!relation) {
       throw new Error(`Unknown relation: ${relationName}`)
     }
+    const nestedPath = rest.join('.')
 
-    return this._clone({
-      preloads: [...this._state.preloads, { relationName, relation, select: options.select ?? null }],
-    })
+    const preloads = [...this._state.preloads]
+    const idx = preloads.findIndex((p) => p.relationName === relationName)
+    if (idx >= 0) {
+      const prev = preloads[idx]
+      preloads[idx] = {
+        ...prev,
+        // Last explicit select wins for a merged relation.
+        select: options.select ?? prev.select ?? null,
+        // Dedup nested paths so the same relation isn't preloaded twice.
+        nested:
+          nestedPath && !(prev.nested || []).includes(nestedPath)
+            ? [...(prev.nested || []), nestedPath]
+            : prev.nested || [],
+      }
+    } else {
+      preloads.push({
+        relationName,
+        relation,
+        select: options.select ?? null,
+        nested: nestedPath ? [nestedPath] : [],
+      })
+    }
+
+    return this._clone({ preloads })
   }
 
   orderBy(field, direction = 'ASC') {
@@ -104,11 +130,27 @@ export class Query {
   models() {
     const result = []
     if (this._model) result.push(this._model.name)
-    for (const { relation } of this._state.preloads) {
-      if (relation.withModel && !result.includes(relation.withModel)) {
-        result.push(relation.withModel)
+
+    // Walk preloads (incl. nested dot-paths) so a query subscribes to every model
+    // it touches — e.g. preload('pet.avatar') subscribes to pet AND document.
+    const walk = (model, preloads) => {
+      for (const p of preloads) {
+        const relation = p.relation || model?.fields?.[p.relationName]
+        const withModel = relation?.withModel
+        if (withModel && !result.includes(withModel)) result.push(withModel)
+        if (p.nested?.length && withModel) {
+          walk(
+            getModel(withModel),
+            p.nested.map((path) => {
+              const [relationName, ...rest] = path.split('.')
+              return { relationName, nested: rest.length ? [rest.join('.')] : [] }
+            })
+          )
+        }
       }
     }
+    walk(this._model, this._state.preloads)
+
     return result
   }
 
@@ -532,11 +574,20 @@ export class Query {
       return rows
     }
 
-    for (const { relationName, relation, select } of this._state.preloads) {
+    for (const { relationName, relation, select, nested } of this._state.preloads) {
       const relatedModel = getModel(relation.withModel)
 
+      // When this relation has nested preloads, force `*`: narrowing columns
+      // could strip the FK the nested preload needs to resolve. (There is no
+      // per-nested select API yet — nested relations always load `*`.)
+      const useSelect = nested?.length ? null : select
+
       // Build select clause - always include 'id' and FK fields
-      const selectClause = select ? ['id', ...select].filter((v, i, a) => a.indexOf(v) === i).join(', ') : '*'
+      const selectClause = useSelect ? ['id', ...useSelect].filter((v, i, a) => a.indexOf(v) === i).join(', ') : '*'
+
+      // The attached related rows (same object refs the parents hold), reused for
+      // nested preloads below.
+      let related
 
       if (relation.type === 'belongsTo') {
         const fkField = `${relationName}Id`
@@ -544,7 +595,7 @@ export class Query {
 
         if (ids.length > 0) {
           const placeholders = ids.map(() => '?').join(', ')
-          const related = await db.getAllAsync(
+          related = await db.getAllAsync(
             `SELECT ${selectClause} FROM ${relatedModel.name} WHERE id IN (${placeholders})`,
             ...ids
           )
@@ -571,15 +622,15 @@ export class Query {
 
         // Include FK (and type) field in select for hasMany
         const baseCols = isPoly ? ['id', typeField, fkField] : ['id', fkField]
-        const hasManySelect = select
-          ? [...baseCols, ...select].filter((v, i, a) => a.indexOf(v) === i).join(', ')
+        const hasManySelect = useSelect
+          ? [...baseCols, ...useSelect].filter((v, i, a) => a.indexOf(v) === i).join(', ')
           : '*'
 
         const where = isPoly
           ? `${typeField} = ? AND ${fkField} IN (${placeholders})`
           : `${fkField} IN (${placeholders})`
         const params = isPoly ? [this._table, ...ids] : ids
-        const related = await db.getAllAsync(
+        related = await db.getAllAsync(
           `SELECT ${hasManySelect} FROM ${relatedModel.name} WHERE ${where}`,
           ...params
         )
@@ -600,12 +651,12 @@ export class Query {
         const fkField = `${this._table}Id`
 
         // Include FK field in select for hasOne
-        const hasOneSelect = select
-          ? ['id', fkField, ...select].filter((v, i, a) => a.indexOf(v) === i).join(', ')
+        const hasOneSelect = useSelect
+          ? ['id', fkField, ...useSelect].filter((v, i, a) => a.indexOf(v) === i).join(', ')
           : '*'
 
         const placeholders = ids.map(() => '?').join(', ')
-        const related = await db.getAllAsync(
+        related = await db.getAllAsync(
           `SELECT ${hasOneSelect} FROM ${relatedModel.name} WHERE ${fkField} IN (${placeholders})`,
           ...ids
         )
@@ -616,6 +667,14 @@ export class Query {
         for (const row of rows) {
           row[relationName] = relatedMap[row.id] ?? null
         }
+      }
+
+      // Nested preload: hydrate the attached related rows (same refs, so parents
+      // see the nested data). e.g. preload('pet.avatar') on an events query.
+      if (nested?.length && related?.length) {
+        let q = relatedModel.query()
+        for (const path of nested) q = q.preload(path)
+        await q._hydrateResults(db, related)
       }
     }
 
