@@ -34,7 +34,7 @@ Built from SQL + params + optional `watch` object. For model queries uses `_buil
 
 ### queryFn contract
 
-`queryFn` receives `watch` object and returns a Query chain — must NOT call `.all()` or `.first()` (those need `db`). Hook calls `.all(db)` internally. Three hooks: `useQuery` (returns array), `useQueryFirst` (adds `.limit(1)` internally, returns single object or null), `useCount` (adds `.select('COUNT(*) as count')`, returns number). All share `useBaseQuery`.
+`queryFn` receives `watch` object and returns a Query chain — must NOT call `.all()` or `.first()` (those need `db`). Hook calls `.all(db)` internally. Three hooks: `useQuery` (returns array), `useQueryFirst` (adds `.limit(1)` internally, returns single object or null), `useCount` (adds `.select('COUNT(*) as count')`, returns number). All share `useBaseQuery`. `useInfiniteQuery` wraps `useQuery` with a growing LIMIT window (`page * limit`) — its `queryFn` must NOT call `.limit()`; the hook owns the window and exposes `fetchMore`/`isFetchingMore`/`canLoadMore`/`done`.
 
 ## Key Files
 
@@ -49,6 +49,7 @@ Built from SQL + params + optional `watch` object. For model queries uses `_buil
 | `EmitterBridge.js` | Null component that calls `setEmitter(emitter)` on mount |
 | `NekoDB.js` | Top-level provider: SQLiteProvider → CacheProvider → EmitterBridge |
 | `hooks/useQuery.js` | Reactive query hooks (useQuery, useQueryFirst, useCount) with fetchPolicy, skip, model subscriptions |
+| `hooks/useInfiniteQuery.js` | Infinite scroll hook — growing LIMIT window over useQuery, masks loading during fetchMore |
 | `hooks/useMutation.js` | Mutation hook with invalidates, update, callbacks |
 | `hooks/useCache.js` | Direct cache read/write/invalidate |
 

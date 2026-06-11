@@ -21,6 +21,7 @@ A lightweight ORM and query builder for Expo SQLite, inspired by Ecto.
 **Reactive Hooks**
 - [useQuery](#usequery)
 - [useCount](#usecount)
+- [useInfiniteQuery](#useinfinitequery)
 - [useMutation](#usemutation)
 - [useCache](#usecache)
 
@@ -1133,6 +1134,53 @@ Auto-reactive like `useQuery` — re-executes when the query's models change.
 
 ---
 
+## useInfiniteQuery
+
+Infinite scroll hook. Runs a single reactive query with a growing `LIMIT` window (`page * limit`, no offset) — `fetchMore` widens the window and re-runs the query. Because there's only one query, model invalidations keep the whole visible list consistent: no page accumulation, no deduplication, no cursor drift.
+
+### Basic Usage
+
+```javascript
+import { useInfiniteQuery } from '@neko-os/db'
+
+function EventsList() {
+  const { result, loading, fetchMore, isFetchingMore } = useInfiniteQuery(
+    () => EventModel.query().where({ deleted: false }).orderBy('date', 'DESC'),
+    { limit: 20 }
+  )
+
+  return (
+    <FlatList
+      data={result}
+      onEndReached={fetchMore}
+      onEndReachedThreshold={0.5}
+      ListFooterComponent={isFetchingMore ? <Loading /> : null}
+    />
+  )
+}
+```
+
+### Parameters
+
+Same as `useQuery`, plus `limit` (page size, default `20`). `queryFn` must NOT call `.limit()` — the hook owns the window. When `watch` changes, the window resets to the first page.
+
+### Returns
+
+Everything `useQuery` returns, plus:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `result` | `array` | Query result, `[]` while null |
+| `loading` | `boolean` | `true` on initial load / watch change / refetch only — NOT during `fetchMore` |
+| `isFetchingMore` | `boolean` | `true` while a `fetchMore` page loads |
+| `fetchMore` | `() => void` | Widen the window by one page. No-ops while loading or when `done`. Stable identity — safe for `onEndReached` |
+| `canLoadMore` | `boolean` | More rows likely exist |
+| `done` | `boolean` | Last query returned fewer rows than the window — list is complete |
+| `page` | `number` | Current page (1-based) |
+| `limit` | `number` | Page size |
+
+---
+
 ## useMutation
 
 Mutation hook for write operations.
@@ -1369,6 +1417,7 @@ Shows all rows in a model's table as formatted JSON. Receives the model name via
 | `useQuery(queryFn, options?)` | Reactive list query — `{ data, loading, error, refetch }` |
 | `useQueryFirst(queryFn, options?)` | Reactive single-record query — `{ data, loading, error, refetch }` |
 | `useCount(queryFn, options?)` | Reactive count — `{ data: number, loading, error, refetch }` |
+| `useInfiniteQuery(queryFn, options?)` | Infinite scroll via growing LIMIT window — adds `{ result, fetchMore, isFetchingMore, canLoadMore, done, page, limit }` |
 | `useMutation(mutationFn, options?)` | Mutation — `[executeFn, { data, loading, error, reset }]` |
 | `useCache()` | Direct cache access — `{ read, write, invalidate, invalidateAll }` |
 
