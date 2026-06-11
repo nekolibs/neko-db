@@ -40,19 +40,27 @@ export class NormalizedCache {
       const field = model.fields[key]
       if (field && ['belongsTo', 'hasMany', 'hasOne'].includes(field.type)) {
         const relModel = field.withModel
+        // belongsTo is rebuilt from the FK on denormalize; hasMany/hasOne have
+        // no FK on this side, so store entity refs to reattach them later.
         if (field.type === 'belongsTo' && value && typeof value === 'object') {
           if (value.id) {
             this._normalizeEntity(getModel(relModel), relModel, value)
           }
         } else if (field.type === 'hasMany' && Array.isArray(value)) {
+          const refs = []
           for (const child of value) {
             if (child?.id) {
               this._normalizeEntity(getModel(relModel), relModel, child)
+              refs.push(this._entityKey(relModel, child.id))
             }
           }
-        } else if (field.type === 'hasOne' && value && typeof value === 'object') {
-          if (value.id) {
+          entity[key] = { __refs: refs }
+        } else if (field.type === 'hasOne') {
+          if (value && typeof value === 'object' && value.id) {
             this._normalizeEntity(getModel(relModel), relModel, value)
+            entity[key] = { __ref: this._entityKey(relModel, value.id) }
+          } else if (value === null) {
+            entity[key] = { __ref: null }
           }
         }
       } else {
@@ -63,33 +71,51 @@ export class NormalizedCache {
     this.entities[key] = { ...this.entities[key], ...entity }
   }
 
-  denormalize(modelName, id) {
+  denormalize(modelName, id, _path = new Set()) {
     const entity = this.readEntity(modelName, id)
     if (!entity) return null
 
     const model = getModel(modelName)
     if (!model) return { ...entity }
 
+    // Cycle guard: when an entity reappears in its own relation chain, emit
+    // its scalar fields but stop expanding relations.
+    const entityKey = this._entityKey(modelName, id)
+    const inCycle = _path.has(entityKey)
+    const path = new Set(_path).add(entityKey)
+
     const result = {}
     for (const [key, value] of Object.entries(entity)) {
       const field = model.fields[key]
       if (field?.type === 'date') {
         result[key] = value != null ? dayjs(value) : null
+      } else if (field?.type === 'hasMany') {
+        const refs = inCycle ? [] : (value?.__refs ?? [])
+        result[key] = refs.map((ref) => this._denormalizeRef(ref, path)).filter(Boolean)
+      } else if (field?.type === 'hasOne') {
+        result[key] = !inCycle && value?.__ref ? this._denormalizeRef(value.__ref, path) : null
       } else {
         result[key] = value
       }
     }
 
-    for (const [key, field] of Object.entries(model.fields)) {
-      if (field.type === 'belongsTo') {
-        const fkId = entity[`${key}Id`]
-        if (fkId) {
-          result[key] = this.denormalize(field.withModel, fkId)
+    if (!inCycle) {
+      for (const [key, field] of Object.entries(model.fields)) {
+        if (field.type === 'belongsTo') {
+          const fkId = entity[`${key}Id`]
+          if (fkId) {
+            result[key] = this.denormalize(field.withModel, fkId, path)
+          }
         }
       }
     }
 
     return result
+  }
+
+  _denormalizeRef(ref, path) {
+    const idx = ref.indexOf(':')
+    return this.denormalize(ref.slice(0, idx), ref.slice(idx + 1), path)
   }
 
   storeQueryResult(queryKey, models, rows, dependsOn) {
