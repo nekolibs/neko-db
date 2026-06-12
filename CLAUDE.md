@@ -24,6 +24,7 @@ NekoDB wraps `SQLiteProvider` + `CacheProvider`. Cache and emitter live in React
 ### Error handling
 
 - Query hooks: a `queryFn` that throws (at build or execution) surfaces as `error` and calls `onError` — never a silent empty result.
+- `useMutation`: errors land in `state.error` and show an error notification by default (`notifyError: false` disables, an object overrides the notification props — handled in the hook, so `_request` files don't need their own `notifier.error` catch). With an `onError` handler the promise resolves (Apollo semantics); without one it rejects, so chain `.catch()`.
 
 ### Emit wiring
 
