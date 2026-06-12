@@ -3,25 +3,25 @@ import { useSQLiteContext } from 'expo-sqlite'
 
 import { useCacheContext } from '../CacheProvider'
 
+// Throws if queryFn throws (e.g. unknown relation in preload) — callers surface
+// that as the hook's `error` instead of swallowing it as "no query".
 function computeQueryKey(queryFn, watch, prefix) {
-  try {
-    const query = queryFn(watch)
-    let sql, params
-    if (query._state?.rawSQL) {
-      sql = query._state.rawSQL
-      params = query._state.rawParams || []
-    } else {
-      ;({ sql, params } = query._buildSelect())
-    }
-    const base = (prefix || '') + sql + '|' + JSON.stringify(params)
-    if (watch) return base + '|' + JSON.stringify(watch)
-    return base
-  } catch {
-    return null
+  const query = queryFn(watch)
+  let sql, params
+  if (query._state?.rawSQL) {
+    sql = query._state.rawSQL
+    params = query._state.rawParams || []
+  } else {
+    ;({ sql, params } = query._buildSelect())
   }
+  const base = (prefix || '') + sql + '|' + JSON.stringify(params)
+  if (watch) return base + '|' + JSON.stringify(watch)
+  return base
 }
 
 function getQueryModels(queryFn, watch) {
+  // Swallowing is fine here: only used to set up subscriptions, and a query
+  // that can't build already surfaced its error via the queryKey path.
   try {
     return queryFn(watch).models()
   } catch {
@@ -53,19 +53,31 @@ function useBaseQuery(queryFn, options, single) {
   dependsOnRef.current = dependsOn
 
   const prefix = single ? 'first|' : ''
-  const queryKey = skip ? null : computeQueryKey(queryFn, watch, prefix)
+  let queryKey = null
+  let buildError = null
+  if (!skip) {
+    try {
+      queryKey = computeQueryKey(queryFn, watch, prefix)
+    } catch (error) {
+      buildError = error
+    }
+  }
   const queryKeyRef = useRef(queryKey)
   queryKeyRef.current = queryKey
+  const buildErrorRef = useRef(buildError)
+  buildErrorRef.current = buildError
+  // queryFn throws a fresh Error object every render — key the effect on the
+  // message so it doesn't loop on identity.
+  const buildErrorKey = buildError ? buildError.message || String(buildError) : null
 
   const execute = useCallback(async () => {
     const fn = queryFnRef.current
     const w = watchRef.current
     const currentDb = dbRef.current
     const currentCache = cacheRef.current
-    const key = computeQueryKey(fn, w, prefix)
-    if (!key) return
 
     try {
+      const key = computeQueryKey(fn, w, prefix)
       const query = fn(w)
       const models = query.models()
       let data
@@ -103,7 +115,11 @@ function useBaseQuery(queryFn, options, single) {
     }
 
     if (!queryKey) {
-      setState({ data: null, loading: false, error: null })
+      // Key couldn't be built because queryFn threw — surface it, don't
+      // silently render an empty result.
+      const error = buildErrorRef.current ?? null
+      setState({ data: null, loading: false, error })
+      if (error) onErrorRef.current?.(error)
       return
     }
 
@@ -127,7 +143,7 @@ function useBaseQuery(queryFn, options, single) {
       }
       execute()
     }
-  }, [skip, fetchPolicy, queryKey])
+  }, [skip, fetchPolicy, queryKey, buildErrorKey])
 
   useEffect(() => {
     if (skip) return

@@ -21,6 +21,10 @@ NekoDB wraps `SQLiteProvider` + `CacheProvider`. Cache and emitter live in React
 - **useQuery**: builds cache key from SQL + params + watch. Subscribes to all models the query touches (via `Query.models()`) plus any `dependsOn` option. On model emit, re-executes query from SQLite.
 - **useMutation**: wraps a DB operation. Model methods auto-emit on write. `invalidates` option for additional models.
 
+### Error handling
+
+- Query hooks: a `queryFn` that throws (at build or execution) surfaces as `error` and calls `onError` — never a silent empty result.
+
 ### Emit wiring
 
 Every write path emits after success:
