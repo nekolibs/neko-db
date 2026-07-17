@@ -614,11 +614,14 @@ export class Query {
         const ids = rows.map((r) => r.id)
         const placeholders = ids.map(() => '?').join(', ')
 
-        // Polymorphic: child has `${base}Type` / `${base}Id` columns. The type
-        // value is this model's table name (e.g. 'event'). Otherwise plain FK.
+        // Polymorphic: child has `${base}Table` or `${base}Type` (legacy) plus
+        // `${base}Id` columns — detected from the related model's declared
+        // fields. The stored value is this model's table name (e.g. 'event').
+        // Otherwise plain FK.
         const isPoly = !!relation.polymorphic
+        const polySuffix = isPoly && relatedModel.fields?.[`${relation.polymorphic}Table`] ? 'Table' : 'Type'
         const fkField = isPoly ? `${relation.polymorphic}Id` : `${this._table}Id`
-        const typeField = isPoly ? `${relation.polymorphic}Type` : null
+        const typeField = isPoly ? `${relation.polymorphic}${polySuffix}` : null
 
         // Include FK (and type) field in select for hasMany
         const baseCols = isPoly ? ['id', typeField, fkField] : ['id', fkField]

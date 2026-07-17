@@ -818,36 +818,48 @@ profile: fields.hasOne('profile')
 
 ### Polymorphic Relationships
 
-A `hasMany` can be **polymorphic** — the related table attaches to *any* model through two columns (`{base}Type` + `{base}Id`) instead of a dedicated foreign key. One table (e.g. `document`) can then hold rows for events, pets, anything. Pass `{ polymorphic: '<base>' }`:
+A `hasMany` can be **polymorphic** — the related table attaches to *any* model through two columns (`{base}Table` + `{base}Id`) instead of a dedicated foreign key. One table (e.g. `document`) can then hold rows for events, pets, anything. Pass `{ polymorphic: '<base>' }`:
 
 ```javascript
 // On each owner model — e.g. EventModel, PetModel:
-documents: fields.hasMany('document', { polymorphic: 'resource' })
+documents: fields.hasMany('document', { polymorphic: 'origin' })
 ```
 
-The related table needs `{base}Type` / `{base}Id` columns (index them together):
+The related table needs `{base}Table` / `{base}Id` columns (index them together), and the related **model** must declare a matching `{base}Table` field so the preload knows the suffix:
+
+```javascript
+export const DocumentModel = new Model('document', {
+  fields: {
+    originTable: fields.string(),   // owner's table name, e.g. 'event'
+    originId: fields.string(),      // owner's id
+    uri: fields.string({ required: true }),
+  },
+})
+```
 
 ```sql
 CREATE TABLE document (
   id TEXT PRIMARY KEY,
-  resourceType TEXT NOT NULL,   -- owner's table name, e.g. 'event'
-  resourceId TEXT NOT NULL,     -- owner's id
+  originTable TEXT NOT NULL,   -- owner's table name, e.g. 'event'
+  originId TEXT NOT NULL,      -- owner's id
   uri TEXT NOT NULL
 );
-CREATE INDEX idx_document_resource ON document (resourceType, resourceId);
+CREATE INDEX idx_document_origin ON document (originTable, originId);
 ```
 
-When writing rows, set `{base}Type` to the **owner model's table name** and `{base}Id` to its id:
+When writing rows, set `{base}Table` to the **owner model's table name** and `{base}Id` to its id:
 
 ```javascript
 await DocumentModel.insert(db, {
-  resourceType: 'event',
-  resourceId: event.id,
+  originTable: 'event',
+  originId: event.id,
   uri: '...',
 })
 ```
 
-`preload('documents')` resolves them with `WHERE resourceType = '<ownerTable>' AND resourceId IN (...)`, grouping per owner. Polymorphic relations are **preload-only** — `join()` isn't supported (there's no single FK to join on).
+`preload('documents')` resolves them with `WHERE originTable = '<ownerTable>' AND originId IN (...)`, grouping per owner. Polymorphic relations are **preload-only** — `join()` isn't supported (there's no single FK to join on).
+
+> **Type-column suffix:** the preload picks the suffix from the related model's declared fields — `{base}Table` if present, otherwise the legacy `{base}Type`. So both `originTable`/`originId` and older `resourceType`/`resourceId` shapes work; just declare the matching field on the model.
 
 ### JOIN (SQL Join)
 
