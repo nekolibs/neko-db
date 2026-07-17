@@ -2,6 +2,7 @@ import { getModel } from '../models'
 import { Query } from '../query'
 import { getCursor, setCursor, setCursorError } from './cursors'
 import { getPushes } from './registry'
+import { assertNoErrors } from './results'
 
 // Runaway backstop — a sane server never comes close.
 const MAX_PAGES = 1000
@@ -106,6 +107,10 @@ export async function runPull(db, def) {
     while (pages < MAX_PAGES) {
       const result = await def.pull({ cursor, db })
       if (!result) break
+
+      // A returned transport result carrying { errors } throws — cursor stays,
+      // nothing stored (no silently skipping server data on a failed pull).
+      assertNoErrors(result, def.id)
 
       const { cursor: nextCursor, full } = result
       const advanced = nextCursor != null && String(nextCursor) !== String(cursor ?? '')
