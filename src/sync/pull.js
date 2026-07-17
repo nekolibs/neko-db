@@ -1,6 +1,6 @@
 import { getModel } from '../models'
 import { Query } from '../query'
-import { getCursor, setCursor, setCursorError } from './cursors'
+import { getCursor, markRun, setCursor, setCursorError } from './cursors'
 import { getPushes } from './registry'
 import { assertNoErrors } from './results'
 
@@ -134,5 +134,8 @@ export async function runPull(db, def) {
     throw error
   }
 
+  // Ran cleanly (advanced pages already stamped via setCursor; a no-new-data pull
+  // stamps here) — record the run time and clear any prior error.
+  await markRun(db, cursorId)
   return { id: def.id, pages, stored, skipped }
 }

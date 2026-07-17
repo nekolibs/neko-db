@@ -9,10 +9,17 @@ export async function ensureCursorsTable(db) {
       id TEXT PRIMARY KEY,
       cursor TEXT,
       lastSuccessAt TEXT,
+      lastRunAt TEXT,
       lastError TEXT,
       errorCount INTEGER NOT NULL DEFAULT 0
     );
   `)
+  // Additive column for installs created before lastRunAt existed — CREATE TABLE
+  // IF NOT EXISTS never alters an existing table, so bring old tables up to date.
+  const columns = await db.getAllAsync('PRAGMA table_info(_sync_cursors)')
+  if (!columns.some((column) => column.name === 'lastRunAt')) {
+    await db.execAsync('ALTER TABLE _sync_cursors ADD COLUMN lastRunAt TEXT')
+  }
 }
 
 export async function getCursor(db, id) {
@@ -21,16 +28,36 @@ export async function getCursor(db, id) {
 }
 
 export async function setCursor(db, id, cursor) {
+  const now = new Date().toISOString()
+  // Data actually moved: stamp both lastSuccessAt (data landed) and lastRunAt (it ran).
   await db.runAsync(
-    `INSERT INTO _sync_cursors (id, cursor, lastSuccessAt, lastError, errorCount)
-     VALUES (?, ?, ?, NULL, 0)
+    `INSERT INTO _sync_cursors (id, cursor, lastSuccessAt, lastRunAt, lastError, errorCount)
+     VALUES (?, ?, ?, ?, NULL, 0)
      ON CONFLICT (id) DO UPDATE SET
        cursor = excluded.cursor,
        lastSuccessAt = excluded.lastSuccessAt,
+       lastRunAt = excluded.lastRunAt,
        lastError = NULL,
        errorCount = 0`,
     id,
     cursor == null ? null : String(cursor),
+    now,
+    now
+  )
+}
+
+// A successful run that moved no data (nothing dirty to push / no new rows to pull).
+// Records "it ran, cleanly" without touching the cursor or lastSuccessAt, and clears
+// any prior error — the operation is no longer failing.
+export async function markRun(db, id) {
+  await db.runAsync(
+    `INSERT INTO _sync_cursors (id, lastRunAt, lastError, errorCount)
+     VALUES (?, ?, NULL, 0)
+     ON CONFLICT (id) DO UPDATE SET
+       lastRunAt = excluded.lastRunAt,
+       lastError = NULL,
+       errorCount = 0`,
+    id,
     new Date().toISOString()
   )
 }

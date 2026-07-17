@@ -1,5 +1,5 @@
 import { syncNow } from './clock'
-import { getCursor, setCursor, setCursorError } from './cursors'
+import { getCursor, markRun, setCursor, setCursorError } from './cursors'
 import { assertNoErrors } from './results'
 
 // Push algorithm (see SYNC_PLAN.md):
@@ -23,8 +23,10 @@ export async function runPush(db, def) {
   try {
     const records = await def.collect({ db, cursor })
 
-    // Nothing to push: null/undefined or an empty array — no API call, no cursor move.
+    // Nothing to push: null/undefined or an empty array — no API call, no cursor
+    // move. Still a successful run, so record it (lastRunAt) without advancing.
     if (records == null || (Array.isArray(records) && records.length === 0)) {
+      await markRun(db, cursorId)
       return { id: def.id, pushed: 0, skippedApi: true }
     }
     const total = Array.isArray(records) ? records.length : 1

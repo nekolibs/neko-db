@@ -32,24 +32,30 @@ function topoLevels(defs) {
 // Failure propagation: a failed def skips its whole downstream subtree for this
 // run (e.g. filesPush fails → eventsPush must not send events referencing files
 // the server never received). The subtree retries together next cycle.
-async function runSide(db, defs, runner) {
+async function runSide(db, defs, runner, side) {
   const results = {}
   const failed = new Set()
 
   for (const level of topoLevels(defs)) {
     await Promise.all(
       level.map(async (def) => {
+        const opKey = `${side}:${def.id}`
+
         if (def.dependsOn.some((dep) => failed.has(dep))) {
           failed.add(def.id)
           results[def.id] = { id: def.id, skipped: true, reason: 'dependency failed' }
+          setOpStatus(opKey, 'skipped')
           return
         }
 
+        setOpStatus(opKey, 'running')
         try {
           results[def.id] = await runner(db, def)
+          setOpStatus(opKey, 'ok')
         } catch (error) {
           failed.add(def.id)
           results[def.id] = { id: def.id, error }
+          setOpStatus(opKey, 'error')
         }
       })
     )
@@ -75,11 +81,17 @@ function pickDefs(defs, ids) {
 // ============================================
 
 const listeners = new Set()
-let status = { syncing: false, lastResult: null, lastError: null, lastSyncAt: null }
+// ops: live per-operation state during a cycle, keyed 'push:<id>' / 'pull:<id>' →
+// 'running' | 'ok' | 'error' | 'skipped'. Lets the UI show which op is syncing right now.
+let status = { syncing: false, lastResult: null, lastError: null, lastSyncAt: null, ops: {} }
 
 function setStatus(patch) {
   status = { ...status, ...patch }
   listeners.forEach((cb) => cb(status))
+}
+
+function setOpStatus(key, state) {
+  setStatus({ ops: { ...status.ops, [key]: state } })
 }
 
 export function getSyncStatus() {
@@ -121,7 +133,7 @@ export async function sync({ db = getDb(), pushIds, pullIds, cooldown = 0 } = {}
   }
 
   running = true
-  setStatus({ syncing: true })
+  setStatus({ syncing: true, ops: {} })
 
   let result = null
   try {
@@ -129,8 +141,8 @@ export async function sync({ db = getDb(), pushIds, pullIds, cooldown = 0 } = {}
       rerunRequested = false
       await clampPushCursors(db)
 
-      const pushes = await runSide(db, pickDefs(getPushes(), pushIds), runPush)
-      const pulls = await runSide(db, pickDefs(getPulls(), pullIds), runPull)
+      const pushes = await runSide(db, pickDefs(getPushes(), pushIds), runPush, 'push')
+      const pulls = await runSide(db, pickDefs(getPulls(), pullIds), runPull, 'pull')
 
       result = { pushes, pulls }
     } while (rerunRequested)
