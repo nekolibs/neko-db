@@ -1,4 +1,5 @@
 import { getModel, getEmitter } from './models'
+import { syncNow } from './sync/clock'
 
 export class Query {
   constructor(source, state = {}) {
@@ -43,6 +44,13 @@ export class Query {
 
   whereIf(condition, conditions) {
     return condition ? this.where(conditions) : this
+  }
+
+  // Sync helper: rows with local changes newer than the push's last success.
+  // No cursor yet (never pushed) = everything ever written locally.
+  whereDirty(cursor) {
+    const { gt, fragment } = require('./operators')
+    return cursor ? this.where({ localUpdatedAt: gt(cursor) }) : this.where(fragment('localUpdatedAt IS NOT NULL'))
   }
 
   orWhere(...conditions) {
@@ -203,7 +211,13 @@ export class Query {
   // WRITE OPERATIONS
   // ============================================
 
-  async _execUpdate(db, data) {
+  async _execUpdate(db, data, fromSync = false) {
+    // Sync dirty marker — single choke point ALL update paths flow through.
+    // fromSync (pull-applied) skips it; an explicit key also suppresses it.
+    if (this._model?.sync && !fromSync && !('localUpdatedAt' in data)) {
+      data = { ...data, localUpdatedAt: syncNow() }
+    }
+
     // Auto-timestamps
     if (this._model?.timestamps && !('updatedAt' in data)) {
       data = { ...data, updatedAt: new Date().toISOString() }
@@ -235,12 +249,12 @@ export class Query {
 
   async update(db, data, options = {}) {
     // Skip triggers: called from Model.update which already handled triggers
-    if (options._skipTriggers) return this._execUpdate(db, data)
+    if (options._skipTriggers) return this._execUpdate(db, data, !!options.fromSync)
 
     // No model or no triggers: fast path
     const hasTriggers = this._model && Object.keys(this._model.triggers).length > 0
     if (!hasTriggers) {
-      const result = await this._execUpdate(db, data)
+      const result = await this._execUpdate(db, data, !!options.fromSync)
       if (this._model) getEmitter()?.emit(this._model.name)
       return result
     }
@@ -253,33 +267,41 @@ export class Query {
 
     if (ids.length === 0) return { changes: 0 }
 
+    const fromSync = !!options.fromSync
+
     // Batch before trigger
     let currentData = data
-    const batchResult = await this._model._fireTrigger('beforeUpdateMany', { ids, data: currentData, db })
+    const batchResult = await this._model._fireTrigger('beforeUpdateMany', { ids, data: currentData, db, fromSync })
     if (batchResult !== undefined) currentData = batchResult
 
     // Per-record before triggers
     for (const id of ids) {
-      const itemResult = await this._model._fireTrigger('beforeUpdate', { id, data: currentData, db })
+      const itemResult = await this._model._fireTrigger('beforeUpdate', { id, data: currentData, db, fromSync })
       if (itemResult !== undefined) currentData = itemResult
     }
 
     // Execute the update
-    const result = await this._execUpdate(db, currentData)
+    const result = await this._execUpdate(db, currentData, fromSync)
 
     // Per-record after triggers
     for (const id of ids) {
-      await this._model._fireTrigger('afterUpdate', { id, data: currentData, db })
+      await this._model._fireTrigger('afterUpdate', { id, data: currentData, db, fromSync })
     }
 
     // Batch after trigger
-    await this._model._fireTrigger('afterUpdateMany', { ids, data: currentData, db })
+    await this._model._fireTrigger('afterUpdateMany', { ids, data: currentData, db, fromSync })
 
     getEmitter()?.emit(this._model.name)
     return result
   }
 
   async delete(db, options = {}) {
+    if (this._model?.sync) {
+      throw new Error(
+        `Model "${this._model.name}" is synced — hard deletes would be invisible to sync. Soft delete instead: update(db, { deleted: true })`
+      )
+    }
+
     // Skip triggers: called from Model.delete which already handled triggers
     if (options._skipTriggers) return this._execDelete(db)
 

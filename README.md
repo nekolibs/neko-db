@@ -25,6 +25,12 @@ A lightweight ORM and query builder for Expo SQLite, inspired by Ecto.
 - [useMutation](#usemutation)
 - [useCache](#usecache)
 
+**Offline Sync**
+- [Sync Engine](#sync-engine)
+- [Push & Pull Definitions](#push--pull-definitions)
+- [SyncProvider](#syncprovider)
+- [Sync Hooks](#sync-hooks)
+
 ---
 
 ## Setup
@@ -1276,6 +1282,169 @@ function MyComponent() {
 
 ---
 
+## Sync Engine
+
+Offline-first sync between the local SQLite DB and a server. Each synced model is
+the source of truth on the device; the engine pushes local changes up and pulls
+remote changes down, resolving conflicts so an unpushed local edit is never
+silently clobbered.
+
+**The transport is yours.** The engine never talks to a network — your push/pull
+definitions own the API calls (Apollo, fetch, anything) and the shape of what's
+sent and stored. The engine owns cursors, ordering, one-run-at-a-time, and the
+correctness rules (dirty tracking, echo-clobber protection).
+
+### Enabling sync on a model
+
+Set `sync: true`. The engine then auto-stamps a `localUpdatedAt` column on every
+local write (this is the "dirty" marker), and **hard deletes are blocked** — synced
+models must soft-delete (`deleted: true`) so deletions can propagate.
+
+```javascript
+export const PetModel = new Model('pet', {
+  sync: true,
+  fields: {
+    name: fields.string({ required: true }),
+    deleted: fields.bool({ default: false }),
+    // ...
+  },
+})
+```
+
+The table needs `localUpdatedAt TEXT` plus whatever cursor column the server uses
+(commonly a monotonic `version`). Pull-applied writes pass `localUpdatedAt: null`
+explicitly so they land "clean" (not re-pushed).
+
+### How it works
+
+- **Push**: collects rows changed since this push's last success (`whereDirty(cursor)`),
+  hands them to your `push`. The cursor advances to the push's *start* time — an edit
+  made mid-request stays dirty and ships next cycle. Nothing is cleared until the
+  server confirms, so a crash mid-push is safe.
+- **Pull**: calls your `pull` with the stored cursor, loops pages until one isn't
+  full, commits each page + its cursor in one transaction. Storing **skips
+  locally-dirty rows** — that's what stops a remote/echo copy from erasing an edit
+  you haven't pushed yet.
+- **Ordering**: pushes run before pulls; `dependsOn` orders defs within each side
+  (same-level in parallel); a failed def skips its dependents that cycle.
+- **One run at a time**: a trigger firing mid-run queues exactly one rerun.
+
+### Push & Pull Definitions
+
+Every step is free logic. Register the defs and the app owns the transport.
+
+```javascript
+import { Push, Pull, registerPushes, registerPulls } from '@neko-os/db'
+
+export const petsPush = new Push('pets', {
+  model: 'pet',                                  // which model's dirty rows this push owns
+  dependsOn: [],                                 // other push ids that must run first
+  collect: async ({ db, cursor }) => {
+    // Read whatever needs pushing. whereDirty(cursor) = rows changed since last push.
+    // Return an empty array / null to skip the API call this cycle.
+    return PetModel.query().whereDirty(cursor).all(db)
+  },
+  push: async ({ records, db, cursor }) => {
+    // Shape and send however you want.
+    await api.upsertPets(records.map(cleanInput))
+  },
+})
+
+export const petsPull = new Pull('pets', {
+  dependsOn: [],
+  pull: async ({ cursor, db }) => {
+    // Fetch from the server (slow work belongs here, not in store).
+    const rows = await api.listPets({ since: cursor })
+    // Return your own shape + the next cursor; `full` drives pagination.
+    return { rows, cursor: rows.at(-1)?.version, full: rows.length === PAGE }
+  },
+  store: async ({ db, result, storeRows, dirtyIds }) => {
+    // Save to SQLite however you want (any tables, any shape).
+    // storeRows(model, rows) is the safe upsert: skips locally-dirty rows,
+    // marks stored rows clean, emits for reactivity.
+    await storeRows('pet', result.rows)
+  },
+})
+
+registerPushes([petsPush])
+registerPulls([petsPull])
+```
+
+`Push` requires `collect` + `push`; `Pull` requires `pull` + `store`. There are no
+default behaviors — every step is explicit.
+
+| Push field | Purpose |
+|-----------|---------|
+| `id` | Unique def id; its cursor is stored under `push:<id>` |
+| `model` / `models` | Which model(s)' pending state this push owns (pull-side dirty checks resolve their cursor through it) |
+| `dependsOn` | Push ids that must succeed first |
+| `collect({ db, cursor })` | Read rows to push; `Model.query().whereDirty(cursor)` is the dirty predicate. Empty/null → skip |
+| `push({ records, db, cursor })` | Send to the server |
+
+| Pull field | Purpose |
+|-----------|---------|
+| `id` | Unique def id; its cursor is stored under `pull:<id>` |
+| `dependsOn` | Pull ids that must run first |
+| `pull({ cursor, db })` | Fetch a page; return `{ ...anything, cursor, full }` — loop while `full` is true |
+| `store({ db, result, storeRows, dirtyIds })` | Persist the page. `storeRows(model, rows)` = safe dirty-skip upsert; `dirtyIds(model)` = the current dirty id set |
+
+### SyncProvider
+
+Sync is opt-in and separate from `NekoDB` (which only provides the DB, bridges, and
+the `_sync_cursors` table). Mount `SyncProvider` where it belongs — commonly gated on
+an active session:
+
+```javascript
+import { SyncProvider } from '@neko-os/db'
+
+function SyncControl() {
+  const session = useSession()          // your app's auth
+  return <SyncProvider pushes={pushes} pulls={pulls} enabled={!!session?.token} />
+}
+```
+
+- Registers the defs **once** on mount.
+- `enabled` starts/stops the triggers without remounting or re-registering — flip it
+  on login/logout and sync follows.
+
+**Config** (`config` prop):
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `syncOnStart` | `true` | Run a full cycle when triggers start |
+| `interval` | `900` | Seconds between foreground cycles (0 disables) |
+| `debouncePush` | `2` | Seconds to debounce a push after a local write (0 disables) |
+| `cooldown` | `30` | Skip a foreground/reconnect/interval cycle if the last finished sooner |
+| `disabled` | `false` | Hard-off switch |
+
+**Triggers**: sync-on-start, app foreground (`AppState` → `active`), connectivity
+restored (`@react-native-community/netinfo`, optional peer — degrades gracefully if
+absent), foreground interval, and a debounced push after writes to synced models.
+
+### Sync Hooks
+
+```javascript
+import { useSync, useSyncStatus, sync, push, pull } from '@neko-os/db'
+
+// Manual controls + live status
+const { sync, push, pull, syncing, lastSyncAt, lastError } = useSync()
+
+// Status only
+const { syncing, lastResult, lastError, lastSyncAt } = useSyncStatus()
+```
+
+| Export | Description |
+|--------|-------------|
+| `sync({ pushIds?, pullIds? })` | Run a full cycle (or scoped subset); resolves when done |
+| `push({ ids? })` / `pull({ ids? })` | Run only that side |
+| `useSyncStatus()` | Reactive `{ syncing, lastResult, lastError, lastSyncAt }` |
+| `useSync()` | `useSyncStatus()` fields + `{ sync, push, pull }` |
+
+Manual `sync()`/`push()`/`pull()` calls bypass the `cooldown` (a pull-to-refresh
+must always run).
+
+---
+
 ## Reset Database
 
 For development and testing, you can reset the database to a clean state.
@@ -1361,6 +1530,18 @@ Shows all rows in a model's table as formatted JSON. Receives the model name via
 │   ├── useQuery.js      # Reactive query hook
 │   ├── useMutation.js   # Mutation hook
 │   └── useCache.js      # Direct cache access hook
+├── sync/                # Offline sync engine
+│   ├── engine.js        # Orchestrator: ordering, mutex, run loop
+│   ├── push.js          # Push runner (dirty collect → your push)
+│   ├── pull.js          # Pull runner (page loop, dirty-skip store, storeRows)
+│   ├── defs.js          # Push / Pull declaration classes
+│   ├── registry.js      # registerPushes / registerPulls
+│   ├── cursors.js       # _sync_cursors table + clamp
+│   ├── clock.js         # Monotonic syncNow()
+│   ├── triggers.js      # AppState / NetInfo / interval / debounced push
+│   ├── DbBridge.js      # Module-level db handle bridge
+│   ├── SyncProvider.js  # Registers defs + runs triggers while enabled
+│   └── hooks/           # useSyncStatus, useSync
 └── views/
     ├── ModelListView.js # Dev: browse models
     └── ModelDataView.js # Dev: inspect table data
@@ -1377,6 +1558,7 @@ Shows all rows in a model's table as formatted JSON. Receives the model name via
 | `select(...fields)` | Columns to select |
 | `where(conditions)` | Filter conditions (AND) |
 | `whereIf(condition, conditions)` | Conditional where — only applied when condition is truthy |
+| `whereDirty(cursor)` | Rows changed since `cursor` (sync: `localUpdatedAt > cursor`, or all locally-written rows when cursor is null) |
 | `orWhere(...conditions)` | Filter conditions (OR) |
 | `join(relation, type?)` | JOIN via model relationship |
 | `joinTable(table, on, type?)` | Explicit JOIN |
@@ -1432,6 +1614,8 @@ Shows all rows in a model's table as formatted JSON. Receives the model name via
 | `useInfiniteQuery(queryFn, options?)` | Infinite scroll via growing LIMIT window — adds `{ result, fetchMore, isFetchingMore, canLoadMore, done, page, limit }` |
 | `useMutation(mutationFn, options?)` | Mutation — `[executeFn, { data, loading, error, reset }]` |
 | `useCache()` | Direct cache access — `{ read, write, invalidate, invalidateAll }` |
+| `useSyncStatus()` | Reactive sync status — `{ syncing, lastResult, lastError, lastSyncAt }` |
+| `useSync()` | Sync status + controls — `{ sync, push, pull, ...status }` |
 
 ### Utility Functions
 

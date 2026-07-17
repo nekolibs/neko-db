@@ -25,13 +25,18 @@
     "expo-sqlite": "*",
     "react": "*",
     "@neko-os/ui": "*",
-    "@react-navigation/native": "*"
+    "@react-navigation/native": "*",
+    "react-native": "*",
+    "@react-native-community/netinfo": "*"
   },
   "peerDependenciesMeta": {
     "@neko-os/ui": {
       "optional": true
     },
     "@react-navigation/native": {
+      "optional": true
+    },
+    "@react-native-community/netinfo": {
       "optional": true
     }
   },

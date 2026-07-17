@@ -68,10 +68,20 @@ Built from SQL + params + optional `watch` object. For model queries uses `_buil
 - Triggers receive raw JS data (before serialization). Serialization happens after triggers.
 - Models with no triggers get fast-path writes (no extra SELECT for affected IDs).
 
+## Sync Engine (`src/sync/`)
+
+Offline-first push/pull sync. Design + traps: [SYNC_PLAN.md](SYNC_PLAN.md); server side: `libs/neko-elixir/docs/sync.md`.
+
+- **Opt-in per model**: `new Model('goal', { fields, sync: true })` — stamps `localUpdatedAt` (device clock, monotonic via `syncNow()`) on every local write; hard deletes throw (soft delete only: `deleted: true`). Pull-applied writes pass `localUpdatedAt: null` (presence check suppresses stamping) and `fromSync: true` reaches trigger contexts.
+- **Defs are explicit — NO default behaviors** (user decision, do not add defaults back): every `Pull` declares `pull` (API call, free logic, returns `{ cursor, full, ...anything }`) AND `store` (writes SQLite, free logic; `storeRows(model, rows)` handed in = dirty-skip upsert + clean marker); every `Push` declares `collect` (reads SQLite, free logic, any payload shape, null = skip; `collectDirty(model)` handed in) AND `push` (API call, free logic). `model:` on a Push declares which model's pending state it owns (pull-side dirty checks resolve the cursor through it).
+- **Push**: dirty = `localUpdatedAt > cursor`; cursor = push START time (mid-flight edits stay dirty); `collectDirty` strips `localUpdatedAt`. **Pull**: opaque server cursor (server `version` column), keyset page loop, per-page transaction; `storeRows` SKIPS locally-dirty rows (correctness mechanism — protects unpushed edits from echo/remote overwrite).
+- **Engine**: `dependsOn` topo levels (parallel within level), failure skips downstream subtree, pulls always run after pushes (soft gate), mutex + one queued rerun, cursor clamp at start.
+- **Wiring**: `<NekoDB>` provides DB + bridges + `_sync_cursors` only (no sync props). Sync is a separate opt-in provider: mount `<SyncProvider pushes={pushes} pulls={pulls} enabled={bool} config={{ interval, debouncePush, cooldown }} />` where it belongs (e.g. inside the auth tree, `enabled` gated on an active session — toggling `enabled` starts/stops triggers without remounting; defs register once). Triggers: syncOnStart, AppState active, NetInfo reconnect (optional peer), foreground interval (default 15min), debounced push on synced-model emits, cooldown (default 30s) gating rapid full cycles. Hooks: `useSyncStatus`, `useSync`. Cursors in lib-owned `_sync_cursors` (created in NekoDB onInit; `resetDatabase` drops it → full resync).
+
 ## Not Yet Built
 
 - Optimistic updates
-- Pagination / infinite scroll
 - Cache garbage collection / eviction
 - Cache persistence to disk
-- Subscription/realtime support
+- Realtime (push-notification-triggered pulls)
+- Sync v2: server conflict check (base_version + rejectedIds + refetch-by-id), tombstone GC, background sync (BGTaskScheduler)
