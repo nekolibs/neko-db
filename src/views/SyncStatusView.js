@@ -24,11 +24,6 @@ function SyncRow({ row, last }) {
     <View row centerV gap="md" padding="md" borderB={!last}>
       <View flex gap="xxs">
         <Text>{row.id}</Text>
-        {row.models?.length ? (
-          <Text xs text3>
-            {row.models.join(', ')}
-          </Text>
-        ) : null}
         {state === 'error' ? (
           <Text xs color="red">
             {row.lastError}
@@ -96,7 +91,7 @@ export function SyncStatusView() {
         </StatePresenter>
       </View>
 
-      <SafeAreaView bg="overlayBG" padding="md" edges={['bottom']}>
+      <SafeAreaView bg="overlayBG" padding="md" edges={['bottom']} borderT>
         <Button
           icon="refresh-line"
           disabled={syncing}

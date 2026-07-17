@@ -56,6 +56,7 @@ async function runSide(db, defs, runner, side) {
           failed.add(def.id)
           results[def.id] = { id: def.id, error }
           setOpStatus(opKey, 'error')
+          emitSyncError(error, { id: def.id, kind: side })
         }
       })
     )
@@ -101,6 +102,27 @@ export function getSyncStatus() {
 export function subscribeSyncStatus(cb) {
   listeners.add(cb)
   return () => listeners.delete(cb)
+}
+
+// ============================================
+// Error handler (optional — set by SyncProvider's onError prop)
+// ============================================
+
+// A single project-supplied reporter. Called once per failed operation with the live
+// Error and { id, kind }, and once for a structural cycle failure (id/kind null).
+let errorHandler = null
+
+export function setSyncErrorHandler(fn) {
+  errorHandler = fn ?? null
+}
+
+// A reporter must never break a sync cycle — swallow anything it throws.
+function emitSyncError(error, info) {
+  try {
+    errorHandler?.(error, info)
+  } catch (_) {
+    // ignore
+  }
 }
 
 // ============================================
@@ -150,6 +172,12 @@ export async function sync({ db = getDb(), pushIds, pullIds, cooldown = 0 } = {}
     const hasError = [...Object.values(result.pushes), ...Object.values(result.pulls)].some((r) => r.error)
     setStatus({ lastResult: result, lastError: hasError ? result : null, lastSyncAt: new Date().toISOString() })
     return result
+  } catch (error) {
+    // Structural failure outside the per-op guard (clamp / topo cycle / unknown def).
+    // Report it and resolve null rather than rejecting — triggers call sync() fire-and-forget.
+    emitSyncError(error, { id: null, kind: null })
+    setStatus({ lastSyncAt: new Date().toISOString() })
+    return null
   } finally {
     running = false
     setStatus({ syncing: false })
