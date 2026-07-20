@@ -3,6 +3,7 @@ import { clampPushCursors } from './cursors'
 import { getPushes, getPulls } from './registry'
 import { runPush } from './push'
 import { runPull } from './pull'
+import { syncLog } from './log'
 
 // ============================================
 // Dependency ordering
@@ -45,6 +46,7 @@ async function runSide(db, defs, runner, side) {
           failed.add(def.id)
           results[def.id] = { id: def.id, skipped: true, reason: 'dependency failed' }
           setOpStatus(opKey, 'skipped')
+          syncLog(opKey, 'skipped: dependency failed')
           return
         }
 
@@ -52,10 +54,12 @@ async function runSide(db, defs, runner, side) {
         try {
           results[def.id] = await runner(db, def)
           setOpStatus(opKey, 'ok')
+          syncLog(opKey, 'ok', results[def.id])
         } catch (error) {
           failed.add(def.id)
           results[def.id] = { id: def.id, error }
           setOpStatus(opKey, 'error')
+          syncLog(opKey, 'error', error?.message || error)
           emitSyncError(error, { id: def.id, kind: side })
         }
       })
@@ -147,15 +151,18 @@ export async function sync({ db = getDb(), pushIds, pullIds, cooldown = 0 } = {}
 
   if (running) {
     rerunRequested = true
+    syncLog('cycle queued: already running')
     return null
   }
 
   if (cooldown > 0 && status.lastSyncAt && Date.now() - Date.parse(status.lastSyncAt) < cooldown * 1000) {
+    syncLog('cycle skipped: cooldown')
     return { skipped: 'cooldown' }
   }
 
   running = true
   setStatus({ syncing: true, ops: {} })
+  syncLog('cycle start', { pushIds: pushIds ?? 'all', pullIds: pullIds ?? 'all' })
 
   let result = null
   try {
@@ -171,10 +178,12 @@ export async function sync({ db = getDb(), pushIds, pullIds, cooldown = 0 } = {}
 
     const hasError = [...Object.values(result.pushes), ...Object.values(result.pulls)].some((r) => r.error)
     setStatus({ lastResult: result, lastError: hasError ? result : null, lastSyncAt: new Date().toISOString() })
+    syncLog('cycle end', hasError ? 'with errors' : 'ok')
     return result
   } catch (error) {
     // Structural failure outside the per-op guard (clamp / topo cycle / unknown def).
     // Report it and resolve null rather than rejecting — triggers call sync() fire-and-forget.
+    syncLog('cycle failed (structural)', error?.message || error)
     emitSyncError(error, { id: null, kind: null })
     setStatus({ lastSyncAt: new Date().toISOString() })
     return null

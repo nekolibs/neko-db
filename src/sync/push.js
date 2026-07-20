@@ -1,6 +1,7 @@
 import { syncNow } from './clock'
 import { getCursor, markRun, setCursor, setCursorError } from './cursors'
 import { assertNoErrors } from './results'
+import { syncLog } from './log'
 
 // Push algorithm (see SYNC_PLAN.md):
 //   cursor = push START time on success — an edit landing while the request is
@@ -27,9 +28,11 @@ export async function runPush(db, def) {
     // move. Still a successful run, so record it (lastRunAt) without advancing.
     if (records == null || (Array.isArray(records) && records.length === 0)) {
       await markRun(db, cursorId)
+      syncLog(`push:${def.id}`, 'nothing dirty, skipped API', { cursor })
       return { id: def.id, pushed: 0, skippedApi: true }
     }
     const total = Array.isArray(records) ? records.length : 1
+    syncLog(`push:${def.id}`, `collected ${total} record(s)`, { cursor })
 
     // A returned transport result carrying { errors } throws here — the cursor
     // is NOT advanced, so the rows stay dirty and retry (no silent data loss).
@@ -37,6 +40,7 @@ export async function runPush(db, def) {
     assertNoErrors(result, def.id)
 
     await setCursor(db, cursorId, start)
+    syncLog(`push:${def.id}`, `pushed ${total}, cursor -> ${start}`)
     return { id: def.id, pushed: total }
   } catch (error) {
     await setCursorError(db, cursorId, error)

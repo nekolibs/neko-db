@@ -3,6 +3,7 @@ import { Query } from '../query'
 import { getCursor, markRun, setCursor, setCursorError } from './cursors'
 import { getPushes } from './registry'
 import { assertNoErrors } from './results'
+import { syncLog } from './log'
 
 // Runaway backstop — a sane server never comes close.
 const MAX_PAGES = 1000
@@ -124,12 +125,14 @@ export async function runPull(db, def) {
       stored += counts.stored
       skipped += counts.skipped
       pages += 1
+      syncLog(`pull:${def.id}`, `page ${pages}`, { ...counts, cursor: advanced ? nextCursor : cursor, full })
 
       // Stall guard: a "full" page that didn't advance the cursor would loop forever.
       if (!full || !advanced) break
       cursor = String(nextCursor)
     }
   } catch (error) {
+    syncLog(`pull:${def.id}`, 'failed', error?.message || error)
     await setCursorError(db, cursorId, error)
     throw error
   }
@@ -137,5 +140,6 @@ export async function runPull(db, def) {
   // Ran cleanly (advanced pages already stamped via setCursor; a no-new-data pull
   // stamps here) — record the run time and clear any prior error.
   await markRun(db, cursorId)
+  syncLog(`pull:${def.id}`, `done: ${pages} page(s), stored ${stored}, skipped ${skipped}`)
   return { id: def.id, pages, stored, skipped }
 }

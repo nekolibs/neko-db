@@ -2,6 +2,7 @@ import { AppState } from 'react-native'
 
 import { getEmitter, getModels } from '../models'
 import { sync, push } from './engine'
+import { syncLog } from './log'
 
 // Optional peer — apps that want reconnect-triggered syncs install it
 // (npx expo install @react-native-community/netinfo). Absent = degrade quietly.
@@ -26,11 +27,17 @@ export function startTriggers(config = {}) {
 
   const cleanups = []
 
-  if (syncOnStart) sync()
+  if (syncOnStart) {
+    syncLog('trigger: syncOnStart')
+    sync()
+  }
 
   // App returns to foreground
   const appStateSub = AppState?.addEventListener?.('change', (state) => {
-    if (state === 'active') sync({ cooldown })
+    if (state === 'active') {
+      syncLog('trigger: AppState active')
+      sync({ cooldown })
+    }
   })
   if (appStateSub?.remove) cleanups.push(() => appStateSub.remove())
 
@@ -40,7 +47,10 @@ export function startTriggers(config = {}) {
     let wasConnected = null
     const unsubscribe = NetInfo.addEventListener((state) => {
       const connected = !!state.isConnected
-      if (wasConnected === false && connected) sync({ cooldown })
+      if (wasConnected === false && connected) {
+        syncLog('trigger: NetInfo reconnect')
+        sync({ cooldown })
+      }
       wasConnected = connected
     })
     cleanups.push(unsubscribe)
@@ -49,7 +59,10 @@ export function startTriggers(config = {}) {
   // Periodic while foregrounded
   if (interval) {
     const timer = setInterval(() => {
-      if (!AppState?.currentState || AppState.currentState === 'active') sync({ cooldown })
+      if (!AppState?.currentState || AppState.currentState === 'active') {
+        syncLog('trigger: interval')
+        sync({ cooldown })
+      }
     }, interval * 1000)
     cleanups.push(() => clearInterval(timer))
   }
@@ -66,6 +79,7 @@ export function startTriggers(config = {}) {
         if (timer) clearTimeout(timer)
         timer = setTimeout(() => {
           timer = null
+          syncLog('trigger: debounced push')
           push()
         }, debouncePush * 1000)
       }
