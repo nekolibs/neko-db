@@ -1,6 +1,6 @@
 {
   "name": "@neko-os/db",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "license": "MIT",
   "author": "Christian Storch <ccstorch@gmail.com>",
   "main": "dist/index.js",
