@@ -177,6 +177,14 @@ export class NormalizedCache {
     this.queries = {}
   }
 
+  // Full teardown, for a DB reset. invalidateAll() only drops queries — the entities
+  // survive, and since useQuery is cache-first, denormalize() would resurrect the
+  // dropped rows into the next read.
+  reset() {
+    this.entities = {}
+    this.queries = {}
+  }
+
   getQueriesForModel(modelName) {
     const keys = []
     for (const [key, entry] of Object.entries(this.queries)) {

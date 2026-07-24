@@ -108,6 +108,14 @@ export function subscribeSyncStatus(cb) {
   return () => listeners.delete(cb)
 }
 
+// DB reset: status is module-level and survives every remount, so lastSyncAt would keep
+// describing cycles that ran against the dropped data. Goes through setStatus so
+// useSyncStatus subscribers re-render. Deliberately leaves `running` alone — that mutex
+// guards an in-flight cycle and is not ours to clear.
+export function resetSyncStatus() {
+  setStatus({ syncing: false, lastResult: null, lastError: null, lastSyncAt: null, ops: {} })
+}
+
 // ============================================
 // Error handler (optional — set by SyncProvider's onError prop)
 // ============================================
@@ -126,6 +134,35 @@ function emitSyncError(error, info) {
     errorHandler?.(error, info)
   } catch (_) {
     // ignore
+  }
+}
+
+// ============================================
+// Lifecycle hooks (optional — set by SyncProvider's hooks prop)
+// ============================================
+
+// { before, after } — before runs ahead of cursor-clamp + pushes, after runs at
+// the end of the success path. A project uses `before` to reconcile local state
+// before anything is pushed (e.g. drop data the user just lost access to, so the
+// doomed push never happens and never fires onError). Called on EVERY sync() —
+// full cycle, push-only, and pull-only — so a hook must be cheap and idempotent.
+let hooks = {}
+
+export function setSyncHooks(next) {
+  hooks = next ?? {}
+}
+
+// A hook must never break a cycle: report a throw and carry on (there is no
+// block semantics). Reported so a genuinely broken hook is not silent.
+async function runHook(name, payload) {
+  const fn = hooks?.[name]
+  if (!fn) return
+
+  try {
+    await fn(payload)
+  } catch (error) {
+    syncLog(`hook:${name}`, 'failed', error?.message || error)
+    emitSyncError(error, { id: name, kind: 'hook' })
   }
 }
 
@@ -166,6 +203,10 @@ export async function sync({ db = getDb(), pushIds, pullIds, cooldown = 0 } = {}
 
   let result = null
   try {
+    // Before anything is pushed — a hook may reconcile local state so a doomed
+    // push never runs. Runs once per sync(), not per rerun iteration.
+    await runHook('before', { db, pushIds, pullIds })
+
     do {
       rerunRequested = false
       await clampPushCursors(db)
@@ -179,6 +220,8 @@ export async function sync({ db = getDb(), pushIds, pullIds, cooldown = 0 } = {}
     const hasError = [...Object.values(result.pushes), ...Object.values(result.pulls)].some((r) => r.error)
     setStatus({ lastResult: result, lastError: hasError ? result : null, lastSyncAt: new Date().toISOString() })
     syncLog('cycle end', hasError ? 'with errors' : 'ok')
+
+    await runHook('after', { db, result, pushIds, pullIds })
     return result
   } catch (error) {
     // Structural failure outside the per-op guard (clamp / topo cycle / unknown def).

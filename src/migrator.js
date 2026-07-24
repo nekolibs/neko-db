@@ -1,3 +1,16 @@
+// Registered by <NekoDB> so a reset can rebuild the schema — resetDatabase drops every
+// table AND sets user_version = 0, so runMigrations has to re-run from scratch after it.
+// Same bridge idiom as setEmitter/setDb.
+let _migrations = []
+
+export function setMigrations(migrations) {
+  _migrations = migrations || []
+}
+
+export function getMigrations() {
+  return _migrations
+}
+
 async function getSchemaVersion(db) {
   const result = await db.getFirstAsync('PRAGMA user_version')
   return result?.user_version ?? 0
