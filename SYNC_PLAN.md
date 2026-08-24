@@ -91,7 +91,7 @@ No overlap window, no serverNow, no clock anywhere on the pull side — version'
 - AppState → `active` → sync
 - Connectivity restored (NetInfo, **optional peer** — degrade gracefully when absent) → sync
 - Interval while foregrounded (configurable)
-- Debounced push (~2s) after local writes to synced models (listens on the module emitter; echo-driven emits collect zero dirty rows → no-op, cheap)
+- Debounced push (~2s) after local writes to synced models (listens on the module emitter; echo-driven emits collect zero dirty rows → no-op, cheap). **Per push def**: a write to model A schedules only A's def(s) + their `dependsOn` closure, each on its own timer. A def sets `autoPush: false` to skip this trigger (still pushed by other triggers / manual push — for chatty edit flows), or `debounce: <sec>` to override the global delay.
 - Manual: `sync()`, `push({ ids })`, `pull({ ids })`
 
 ## Lib-side changes
@@ -170,6 +170,10 @@ export const goalsPull = {
 ```
 
 Lib owns cursors, dirty logic, ordering, scheduling. App owns endpoints, payload shape, auth headers. Multi-model defs supported (one def, several models) — cursor is per-def, so one failing model store must not advance the shared cursor (store is all-or-nothing per def).
+
+A def may also carry an optional `enabled({ db })` predicate (sync/async): false → the engine skips it for that cycle before collect/pull runs and does not advance the cursor (recorded via `markRun`), so a push's dirty rows stay dirty and a pull resumes from the same cursor once re-enabled. Declarative per-def run condition (e.g. only push while logged in). See README / CLAUDE for the shipped shape.
+
+A **Push** may also tune the write-trigger: `autoPush: false` opts it out of the per-write debounced push (still pushed by other triggers + manual `push()`), and `debounce: <sec>` overrides the global `debouncePush` for that def. See README / CLAUDE for the shipped shape.
 
 ## Server contract — BUILT
 

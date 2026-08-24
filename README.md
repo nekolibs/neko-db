@@ -1339,6 +1339,9 @@ import { Push, Pull, registerPushes, registerPulls } from '@neko-os/db'
 export const petsPush = new Push('pets', {
   model: 'pet',                                  // which model's dirty rows this push owns
   dependsOn: [],                                 // other push ids that must run first
+  // enabled: () => !!getSession()?.user?.id,    // optional gate — only run while logged in
+  // autoPush: false,                            // opt out of the per-write debounced push
+  // debounce: 60,                               // per-def write-trigger delay (seconds)
   collect: async ({ db, cursor }) => {
     // Read whatever needs pushing. whereDirty(cursor) = rows changed since last push.
     // Return an empty array / null to skip the API call this cycle.
@@ -1373,18 +1376,44 @@ registerPulls([petsPull])
 `Push` requires `collect` + `push`; `Pull` requires `pull` + `store`. There are no
 default behaviors — every step is explicit.
 
+**Conditional defs (`enabled`).** Both `Push` and `Pull` accept an optional
+`enabled({ db })` predicate (sync or async). When it returns false the def is
+skipped for that cycle **before** `collect`/`pull` runs, and the cursor is **not**
+advanced — the run is recorded via `markRun`, so a push's dirty rows stay dirty and
+a pull resumes from the same server cursor once it re-enables. Use it to declare a
+run condition per def, e.g. `enabled: () => !!getSession()?.user?.id` on a push that
+must only upload while logged in (offline-first: a guest keeps editing locally, and
+those rows push up the first cycle after login — nothing is lost). Omit it to always
+run. Returning empty/null from `collect` also skips safely, but `enabled` is
+declarative, reused across push + pull, and short-circuits before the SQLite read.
+
+**Write-trigger scheduling (`autoPush`, `debounce`).** By default a local write to a
+push's model schedules a debounced push of just that def (see [Triggers](#syncprovider)).
+Two Push opts tune it. `autoPush: false` opts the def out of the write-trigger
+entirely — its rows still go up on syncOnStart / interval / foreground / reconnect and
+on any manual `sync()`/`push()`, just not per keystroke. Use it for chatty edit flows
+(a workout being logged set by set) and push explicitly when the flow completes. `debounce`
+(seconds) overrides the SyncProvider `debouncePush` for this def only. Caveat: an
+`autoPush: false` def is still pushed when a downstream def `dependsOn` it and gets
+debounced — the dependency closure drags it in, because ordering correctness wins over
+the opt-out.
+
 | Push field | Purpose |
 |-----------|---------|
 | `id` | Unique def id; its cursor is stored under `push:<id>` |
 | `model` / `models` | Which model(s)' pending state this push owns (pull-side dirty checks resolve their cursor through it) |
 | `dependsOn` | Push ids that must succeed first |
+| `enabled({ db })` | Optional gate (sync/async). False → skip this cycle before `collect`, cursor not advanced (dirty rows stay dirty). Omit = always run |
 | `collect({ db, cursor })` | Read rows to push; `Model.query().whereDirty(cursor)` is the dirty predicate. Empty/null → skip |
 | `push({ records, db, cursor })` | Send to the server |
+| `autoPush` | Default `true`. `false` → excluded from the per-write debounced push (other triggers + manual push still run it) |
+| `debounce` | Optional per-def write-trigger delay in seconds; overrides `debouncePush`. Ignored when `autoPush: false` |
 
 | Pull field | Purpose |
 |-----------|---------|
 | `id` | Unique def id; its cursor is stored under `pull:<id>` |
 | `dependsOn` | Pull ids that must run first |
+| `enabled({ db })` | Optional gate (sync/async). False → skip this cycle before `pull`, server cursor not advanced. Omit = always run |
 | `pull({ cursor, db })` | Fetch a page; return `{ ...anything, cursor, full }` — loop while `full` is true |
 | `store({ db, result, storeRows, dirtyIds })` | Persist the page. `storeRows(model, rows)` = safe dirty-skip upsert; `dirtyIds(model)` = the current dirty id set |
 
@@ -1413,13 +1442,16 @@ function SyncControl() {
 |--------|---------|-------------|
 | `syncOnStart` | `true` | Run a full cycle when triggers start |
 | `interval` | `900` | Seconds between foreground cycles (0 disables) |
-| `debouncePush` | `2` | Seconds to debounce a push after a local write (0 disables) |
+| `debouncePush` | `2` | Seconds to debounce a push after a local write (0 disables the write-trigger). A push def can override per-def with `debounce`, or opt out with `autoPush: false` |
 | `cooldown` | `30` | Skip a foreground/reconnect/interval cycle if the last finished sooner |
 | `disabled` | `false` | Hard-off switch |
 
 **Triggers**: sync-on-start, app foreground (`AppState` → `active`), connectivity
 restored (`@react-native-community/netinfo`, optional peer — degrades gracefully if
-absent), foreground interval, and a debounced push after writes to synced models.
+absent), foreground interval, and a debounced push after writes to synced models. The
+write-trigger is **per push def** — a write to model A pushes only A's def (plus its
+`dependsOn` closure), on its own timer, so unrelated defs aren't dragged to the API;
+tune it per def with `autoPush` / `debounce` (see [Push definitions](#push--pull-definitions)).
 
 ### Sync Hooks
 
@@ -1538,7 +1570,7 @@ Shows all rows in a model's table as formatted JSON. Receives the model name via
 │   ├── registry.js      # registerPushes / registerPulls
 │   ├── cursors.js       # _sync_cursors table + clamp
 │   ├── clock.js         # Monotonic syncNow()
-│   ├── triggers.js      # AppState / NetInfo / interval / debounced push
+│   ├── triggers.js      # AppState / NetInfo / interval / per-def debounced push
 │   ├── DbBridge.js      # Module-level db handle bridge
 │   ├── SyncProvider.js  # Registers defs + runs triggers while enabled
 │   └── hooks/           # useSyncStatus, useSync

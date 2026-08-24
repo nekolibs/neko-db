@@ -22,6 +22,15 @@ export async function runPush(db, def) {
   // the cursor (lastError) and leaves the cursor un-advanced, so rows stay dirty
   // and retry. Nothing is ever silently marked clean.
   try {
+    // Declared gate — skip this cycle without touching the cursor when disabled
+    // (e.g. a push that only runs while logged in). markRun records the run; the
+    // dirty rows stay dirty and push once the def re-enables.
+    if (def.enabled && !(await def.enabled({ db }))) {
+      await markRun(db, cursorId)
+      syncLog(`push:${def.id}`, 'disabled, skipped', { cursor })
+      return { id: def.id, pushed: 0, disabled: true }
+    }
+
     const records = await def.collect({ db, cursor })
 
     // Nothing to push: null/undefined or an empty array — no API call, no cursor

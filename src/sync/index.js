@@ -1,5 +1,5 @@
 export { Pull, Push } from './defs'
-export { registerPushes, registerPulls, getPushes, getPulls } from './registry'
+export { registerPushes, registerPulls, getPushes, getPulls, pushDefsForModel } from './registry'
 export { sync, push, pull, isSyncing, getSyncStatus, subscribeSyncStatus, setSyncErrorHandler, setSyncHooks } from './engine'
 export { runPush } from './push'
 export { runPull, storeRows } from './pull'

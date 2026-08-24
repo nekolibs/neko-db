@@ -1,7 +1,7 @@
 import { getModel } from '../models'
 import { Query } from '../query'
 import { getCursor, markRun, setCursor, setCursorError } from './cursors'
-import { getPushes } from './registry'
+import { pushDefsForModel } from './registry'
 import { assertNoErrors } from './results'
 import { syncLog } from './log'
 
@@ -9,10 +9,8 @@ import { syncLog } from './log'
 const MAX_PAGES = 1000
 
 function pushCursorIdForModel(modelName) {
-  for (const def of Object.values(getPushes())) {
-    if (def.models.includes(modelName)) return `push:${def.id}`
-  }
-  return null
+  const def = pushDefsForModel(modelName)[0]
+  return def ? `push:${def.id}` : null
 }
 
 // Dirty = has an unpushed local change (same predicate as whereDirty in collects).
@@ -105,6 +103,15 @@ export async function runPull(db, def) {
   let skipped = 0
 
   try {
+    // Declared gate — skip this cycle without advancing the (server-version)
+    // cursor when disabled. markRun records the run; the next enabled cycle
+    // resumes from the same cursor.
+    if (def.enabled && !(await def.enabled({ db }))) {
+      await markRun(db, cursorId)
+      syncLog(`pull:${def.id}`, 'disabled, skipped', { cursor })
+      return { id: def.id, pages: 0, stored: 0, skipped: 0, disabled: true }
+    }
+
     while (pages < MAX_PAGES) {
       const result = await def.pull({ cursor, db })
       if (!result) break

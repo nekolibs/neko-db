@@ -2,6 +2,7 @@ import { AppState } from 'react-native'
 
 import { getEmitter, getModels } from '../models'
 import { sync, push } from './engine'
+import { getPushes, pushDefsForModel } from './registry'
 import { syncLog } from './log'
 
 // Optional peer — apps that want reconnect-triggered syncs install it
@@ -67,27 +68,50 @@ export function startTriggers(config = {}) {
     cleanups.push(() => clearInterval(timer))
   }
 
-  // Debounced push after local writes to synced models. Pull-applied writes also
-  // emit — the resulting push collects zero dirty rows and skips the API (cheap).
+  // Per-def debounced push after local writes. A scoped push carries each def's
+  // transitive dependsOn closure — pickDefs treats deps outside the picked subset as
+  // satisfied, so pushing a def alone would skip an upstream it must follow.
   if (debouncePush) {
     const emitter = getEmitter()
     const syncedModels = Object.values(getModels()).filter((model) => model.sync)
 
     if (emitter && syncedModels.length > 0) {
-      let timer = null
-      const schedule = () => {
-        if (timer) clearTimeout(timer)
-        timer = setTimeout(() => {
-          timer = null
-          syncLog('trigger: debounced push')
-          push()
-        }, debouncePush * 1000)
+      const closureOf = (defId) => {
+        const pushes = getPushes()
+        const ids = new Set()
+        const visit = (id) => {
+          if (ids.has(id) || !pushes[id]) return
+          ids.add(id)
+          ;(pushes[id].dependsOn || []).forEach(visit)
+        }
+        visit(defId)
+        return [...ids]
+      }
+
+      const timers = new Map()
+      const schedule = (defId, seconds) => {
+        if (timers.has(defId)) clearTimeout(timers.get(defId))
+        timers.set(
+          defId,
+          setTimeout(() => {
+            timers.delete(defId)
+            syncLog('trigger: debounced push', defId)
+            push({ ids: closureOf(defId) })
+          }, seconds * 1000)
+        )
       }
 
       syncedModels.forEach((model) => {
-        cleanups.push(emitter.subscribe(model.name, schedule))
+        cleanups.push(
+          emitter.subscribe(model.name, () => {
+            pushDefsForModel(model.name).forEach((def) => {
+              if (def.autoPush === false) return
+              schedule(def.id, def.debounce ?? debouncePush)
+            })
+          })
+        )
       })
-      cleanups.push(() => timer && clearTimeout(timer))
+      cleanups.push(() => timers.forEach((timer) => clearTimeout(timer)))
     }
   }
 
