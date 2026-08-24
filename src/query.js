@@ -1,6 +1,12 @@
 import { getModel, getEmitter } from './models'
 import { syncNow } from './sync/clock'
 
+// expo-sqlite is a single shared connection, and withTransactionAsync BEGINs on it.
+// Concurrent transactions (parallel sync pulls) overlap their BEGINs → "cannot start
+// a transaction within a transaction". This queue serializes transactions process-wide
+// so at most one BEGIN…COMMIT is in flight; non-transactional statements still interleave.
+let _txQueue = Promise.resolve()
+
 export class Query {
   constructor(source, state = {}) {
     // source can be: Model instance, model name string, or table name
@@ -376,11 +382,15 @@ export class Query {
   }
 
   static async transaction(db, fn) {
-    let result
-    await db.withTransactionAsync(async () => {
-      result = await fn()
+    const run = _txQueue.then(async () => {
+      let result
+      await db.withTransactionAsync(async () => {
+        result = await fn()
+      })
+      return result
     })
-    return result
+    _txQueue = run.then(() => undefined, () => undefined)
+    return run
   }
 
   static _buildConflictClause(columns, onConflict) {
